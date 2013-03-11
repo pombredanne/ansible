@@ -295,8 +295,8 @@ won't need them for much else.
    Notify handlers are always run in the order written.
 
 
-Include Files And Encouraging Reuse
-```````````````````````````````````
+Task Include Files And Encouraging Reuse
+````````````````````````````````````````
 
 Suppose you want to reuse lists of tasks between plays or playbooks.  You can use
 include files to do this.  Use of included task lists is a great way to define a role
@@ -334,10 +334,25 @@ Variables passed in can then be used in the included files.  You can reference t
 (In addition to the explicitly passed in parameters, all variables from
 the vars section are also available for use here as well.)
 
+Starting in 1.0, variables can also be passed to include files using an alternative syntax,
+which also supports structured variables::
+
+    tasks:
+
+      - include: wordpress.yml
+        vars:
+            user: timmy
+            some_list_variable: 
+              - alpha
+              - beta
+              - gamma
+
+Playbooks can include other playbooks too, but that's mentioned in a later section.
+
 .. note::
-   Task include statements are only usable one-level deep.
-   This means task includes can not include other
-   task includes.  This may change in a later release.
+   As of 1.0, task include statements can be used at arbitrary depth.
+   They were previously limited to a single level, so task includes
+   could not include other files containing task includes.
 
 Includes can also be used in the 'handlers' section, for instance, if you
 want to define how to restart apache, you only have to do that once for all
@@ -399,7 +414,7 @@ Tips and Tricks
 
 Look at the bottom of the playbook execution for a summary of the nodes that were executed
 and how they performed.   General failures and fatal "unreachable" communication attempts are
-kept seperate in the counts.
+kept separate in the counts.
 
 If you ever want to see detailed output from successful modules as well as unsuccessful ones,
 use the '--verbose' flag.  This is available in Ansible 0.5 and later.

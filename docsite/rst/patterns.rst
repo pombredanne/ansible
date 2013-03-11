@@ -48,9 +48,25 @@ Adding a lot of hosts?  In 0.6 and later, if you have a lot of hosts following s
 
     [webservers]
     www[01:50].example.com
+
+
+In 1.0 and later, you can also do this for alphabetic ranges::
+
+    [databases]
     db-[a:f].example.com
 
 For numeric patterns, leading zeros can be included or removed, as desired. Ranges are inclusive.
+
+In 1.1 and later, you can also select the connection type and user on a per host basis::
+
+   [targets]
+
+   localhost              ansible_connection=local
+   other1.example.com     ansible_connection=ssh        ansible_ssh_user=mpdehaan
+   other2.example.com     ansible_connection=ssh        ansible_ssh_user=mdehaan
+
+All of these variables can of course also be set outside of the inventory file, in 'host_vars' if you wish
+to keep your inventory file simple.
 
 Selecting Targets
 +++++++++++++++++
@@ -89,6 +105,18 @@ with the aforementioned bracket headers in the inventory file::
 You can exclude groups as well, for instance, all webservers not in Phoenix::
 
     webservers:!phoenix
+
+You can also specify the intersection of two groups::
+
+    webservers:&staging
+
+You can do combinations::
+
+    webservers:dbservers:!phoenix:&staging
+
+You can also use variables::
+
+    webservers:!$excluded:&$required
 
 Individual host names (or IPs), but not groups, can also be referenced using
 wildcards::
@@ -157,7 +185,7 @@ variables to groups.  These variables can be used by /usr/bin/ansible-playbook, 
    southeast
 
 If you need to store lists or hash data, or prefer to keep host and group specific variables
-seperate from the inventory file, see the next section.
+separate from the inventory file, see the next section.
 
 Splitting Out Host and Group Specific Data
 ++++++++++++++++++++++++++++++++++++++++++
@@ -193,22 +221,9 @@ Tip: Keeping your inventory file and variables in a git repo (or other version c
 is an excellent way to track changes to your inventory and host variables.
 
 .. versionadded:: 0.5
-   If you ever have two python interpreters on a system, set a
-   variable called 'ansible_python_interpreter' to the Python
+   If you ever have two python interpreters on a system, or your Python version 2 interpreter is not found
+   at /usr/bin/python, set an inventory variable called 'ansible_python_interpreter' to the Python
    interpreter path you would like to use.
-
-YAML Inventory
-++++++++++++++
-
-.. deprecated:: 0.7
-
-Ansible's YAML inventory format is deprecated and will be removed in
-Ansible 0.7.  Ansible 0.6 includes a `conversion script
-<https://github.com/ansible/ansible/blob/devel/examples/scripts/yaml_to_ini.py>`_.
-
-Usage::
-
-    yaml_to_ini.py /etc/ansible/hosts
 
 .. seealso::
 

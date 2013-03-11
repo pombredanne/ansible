@@ -109,6 +109,8 @@ class InventoryParser(object):
                         self.hosts[hn] = host
                     if len(tokens) > 1:
                         for t in tokens[1:]:
+                            if t.startswith('#'):
+                                break
                             (k,v) = t.split("=")
                             host.set_variable(k,v)
                     self.groups[active_group_name].add_host(host)
@@ -171,3 +173,6 @@ class InventoryParser(object):
                         group.set_variable(k, re.sub(r"^['\"]|['\"]$", '', v))
                     else:
                         group.set_variable(k, v)
+
+    def get_host_variables(self, host):
+        return {}

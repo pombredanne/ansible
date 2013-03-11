@@ -79,17 +79,13 @@ class Subversion(object):
         self.password = password
 
     def _exec(self, args):
-        bits = ["svn --non-interactive --no-auth-cache", ]
+        bits = ["svn --non-interactive --trust-server-cert --no-auth-cache", ]
         if self.username:
             bits.append("--username '%s'" % self.username)
         if self.password:
             bits.append("--password '%s'" % self.password)
         bits.append(args)
-        cmd = subprocess.Popen(' '.join(bits), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = cmd.communicate()
-        rc = cmd.returncode
-        if rc != 0:
-            self.module.fail_json(msg=err)
+        rc, out, err = self.module.run_command(' '.join(bits), check_rc=True)
         return out.splitlines()
 
     def checkout(self):
@@ -124,6 +120,17 @@ class Subversion(object):
         # Has local mods if more than 0 modifed revisioned files.
         return len(filter(regex.match, lines)) > 0
 
+    def needs_update(self):
+        curr, url = self.get_revision()
+        out2 = '\n'.join(self._exec("info -r HEAD '%s'" % self.dest))
+        head = re.search(r'^Revision:.*$', out2, re.MULTILINE).group(0)
+        rev1 = int(curr.split(':')[1].strip())
+        rev2 = int(head.split(':')[1].strip())
+        change = False
+        if rev1 < rev2:
+            change = True
+        return change, curr, head
+
 
 # ===========================================
 
@@ -133,16 +140,17 @@ def main():
             dest=dict(required=True),
             repo=dict(required=True, aliases=['name', 'repository']),
             revision=dict(default='HEAD', aliases=['rev']),
-            force=dict(default='yes', choices=['yes', 'no']),
+            force=dict(default='yes', type='bool'),
             username=dict(required=False),
             password=dict(required=False),
-        )
+        ),
+        supports_check_mode=True
     )
 
     dest = os.path.expanduser(module.params['dest'])
     repo = module.params['repo']
     revision = module.params['revision']
-    force = module.boolean(module.params['force'])
+    force = module.params['force']
     username = module.params['username']
     password = module.params['password']
 
@@ -151,11 +159,16 @@ def main():
     if not os.path.exists(dest):
         before = None
         local_mods = False
+        if module.check_mode:
+            module.exit_json(changed=True)
         svn.checkout()
     elif os.path.exists("%s/.svn" % (dest, )):
         # Order matters. Need to get local mods before switch to avoid false
         # positives. Need to switch before revert to ensure we are reverting to
         # correct repo.
+        if module.check_mode:
+            check, before, after = svn.needs_update()
+            module.exit_json(changed=check, before=before, after=after)
         before = svn.get_revision()
         local_mods = svn.has_local_mods()
         svn.switch()
