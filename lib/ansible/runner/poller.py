@@ -48,7 +48,7 @@ class AsyncPoller(object):
             if jid is None:
                 raise errors.AnsibleError("unexpected error: unable to determine jid")
             if len(self.hosts_to_poll)==0:
-                raise errors.AnsibleErrot("unexpected error: no hosts to poll")
+                raise errors.AnsibleError("unexpected error: no hosts to poll")
         self.jid = jid
 
     def poll(self):
@@ -73,7 +73,7 @@ class AsyncPoller(object):
             else:
                 self.results['contacted'][host] = res
                 poll_results['contacted'][host] = res
-                if 'failed' in res:
+                if res.get('failed', False) or res.get('rc', 0) != 0:
                     self.runner.callbacks.on_async_failed(host, res, self.jid)
                 else:
                     self.runner.callbacks.on_async_ok(host, res, self.jid)

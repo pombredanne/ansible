@@ -15,8 +15,13 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
+import base64
 import json
+import os.path
 import yaml
+import types
+import pipes
+from ansible import errors
 
 def to_nice_yaml(*a, **kw):
     '''Make verbose, human readable yaml'''
@@ -26,11 +31,57 @@ def to_nice_json(*a, **kw):
     '''Make verbose, human readable JSON'''
     return json.dumps(*a, indent=4, sort_keys=True, **kw)
 
+def failed(*a, **kw):
+    item = a[0] 
+    if type(item) != dict:
+        raise errors.AnsibleFilterError("|failed expects a dictionary")
+    rc = item.get('rc',0)
+    failed = item.get('failed',False)
+    if rc != 0 or failed:
+        return True
+    else:
+        return False
+
+def success(*a, **kw):
+    return not failed(*a, **kw)
+
+def skipped(*a, **kw):
+    item = a[0]
+    if type(item) != dict:
+        raise errors.AnsibleFilterError("|skipped expects a dictionary")
+    skipped = item.get('skipped', False)
+    return skipped
+
+def mandatory(a):
+    ''' Make a variable mandatory '''
+    if not a:
+        raise errors.AnsibleFilterError('Mandatory variable not defined.')
+    return a
+
+def bool(a):
+    ''' return a bool for the arg '''
+    if a is None or type(a) == bool:
+        return a
+    if type(a) in types.StringTypes:
+        a = a.lower()
+    if a in ['yes', 'on', '1', 'true', 1]:
+        return True
+    else:
+        return False
+
+def quote(a):
+    ''' return its argument quoted for shell usage '''
+    return pipes.quote(a)
+
 class FilterModule(object):
     ''' Ansible core jinja2 filters '''
 
     def filters(self):
         return {
+            # base 64
+            'b64decode': base64.b64decode,
+            'b64encode': base64.b64encode,
+
             # json
             'to_json': json.dumps,
             'to_nice_json': to_nice_json,
@@ -40,5 +91,25 @@ class FilterModule(object):
             'to_yaml': yaml.safe_dump,
             'to_nice_yaml': to_nice_yaml,
             'from_yaml': yaml.safe_load,
+
+            # path
+            'basename': os.path.basename,
+            'dirname': os.path.dirname,
+
+            # failure testing
+            'failed'  : failed,
+            'success' : success,
+
+            # skip testing
+            'skipped' : skipped,
+
+            # variable existence
+            'mandatory': mandatory,
+
+            # value as boolean
+            'bool': bool,
+
+            # quote string for shell usage
+            'quote': quote,
         }
     

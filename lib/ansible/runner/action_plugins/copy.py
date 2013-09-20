@@ -18,11 +18,20 @@
 import os
 
 from ansible import utils
+import ansible.utils.template as template
 from ansible import errors
 from ansible.runner.return_data import ReturnData
 import base64
 import stat
 import tempfile
+import pipes
+
+## fixes https://github.com/ansible/ansible/issues/3518
+# http://mypy.pythonblogs.com/12_mypy/archive/1253_workaround_for_python_bug_ascii_codec_cant_encode_character_uxa0_in_position_111_ordinal_not_in_range128.html
+import sys
+reload(sys)
+sys.setdefaultencoding("utf8")
+
 
 class ActionModule(object):
 
@@ -40,6 +49,8 @@ class ActionModule(object):
         source  = options.get('src', None)
         content = options.get('content', None)
         dest    = options.get('dest', None)
+        raw     = utils.boolean(options.get('raw', 'no'))
+        force   = utils.boolean(options.get('force', 'yes'))
 
         if (source is None and content is None and not 'first_available_file' in inject) or dest is None:
             result=dict(failed=True, msg="src (or content) and dest are required")
@@ -53,10 +64,13 @@ class ActionModule(object):
         if 'first_available_file' in inject:
             found = False
             for fn in inject.get('first_available_file'):
-                fn = utils.template(self.runner.basedir, fn, inject)
-                fn = utils.path_dwim(self.runner.basedir, fn)
-                if os.path.exists(fn):
-                    source = fn
+                fn_orig = fn
+                fnt = template.template(self.runner.basedir, fn, inject)
+                fnd = utils.path_dwim(self.runner.basedir, fnt)
+                if not os.path.exists(fnd) and '_original_file' in inject:
+                    fnd = utils.path_dwim_relative(inject['_original_file'], 'files', fnt, self.runner.basedir, check=False)
+                if os.path.exists(fnd):
+                    source = fnd
                     found = True
                     break
             if not found:
@@ -74,8 +88,12 @@ class ActionModule(object):
             f.close()
             source = tmp_content
         else:
-            source = utils.template(self.runner.basedir, source, inject)
-            source = utils.path_dwim(self.runner.basedir, source)
+            source = template.template(self.runner.basedir, source, inject)
+            if '_original_file' in inject:
+                source = utils.path_dwim_relative(inject['_original_file'], 'files', source, self.runner.basedir)
+            else:
+                source = utils.path_dwim(self.runner.basedir, source)
+
 
         local_md5 = utils.md5(source)
         if local_md5 is None:
@@ -96,30 +114,47 @@ class ActionModule(object):
             dest = os.path.join(dest, os.path.basename(source))
             remote_md5 = self.runner._remote_md5(conn, tmp, dest)
 
+        # remote_md5 == '1' would mean that the file does not exist.
+        if remote_md5 != '1' and not force:
+            return ReturnData(conn=conn, result=dict(changed=False))
+
         exec_rc = None
         if local_md5 != remote_md5:
 
-            if self.runner.diff:
+            if self.runner.diff and not raw:
                 diff = self._get_diff_data(conn, tmp, inject, dest, source)
             else:
                 diff = {}
 
-            if self.runner.check:
+            if self.runner.noop_on_check(inject):
                 if content is not None:
                     os.remove(tmp_content)
                 return ReturnData(conn=conn, result=dict(changed=True), diff=diff)
 
+
             # transfer the file to a remote tmp location
-            tmp_src = tmp + os.path.basename(source)
-            conn.put_file(source, tmp_src)
+            tmp_src = tmp + 'source'
+
+            if not raw:
+                conn.put_file(source, tmp_src)
+            else:
+                conn.put_file(source, dest)
+
             if content is not None:
                 os.remove(tmp_content)
+
             # fix file permissions when the copy is done as a different user
-            if self.runner.sudo and self.runner.sudo_user != 'root':
+            if self.runner.sudo and self.runner.sudo_user != 'root' and not raw:
                 self.runner._low_level_exec_command(conn, "chmod a+r %s" % tmp_src, tmp)
 
+            if raw:
+                return ReturnData(conn=conn, result=dict(dest=dest, changed=True))
+
             # run the copy module
-            module_args = "%s src=%s" % (module_args, tmp_src)
+            if 'raw' in module_args:
+                # don't send down raw=no
+                module_args.pop('raw')
+            module_args = "%s src=%s original_basename=%s" % (module_args, pipes.quote(tmp_src), pipes.quote(os.path.basename(source)))
             return self.runner._execute_module(conn, tmp, 'copy', module_args, inject=inject, complex_args=complex_args)
 
         else:
@@ -128,9 +163,16 @@ class ActionModule(object):
 
             if content is not None:
                 os.remove(tmp_content)
+
+            if raw:
+                return ReturnData(conn=conn, result=dict(dest=dest, changed=False))
+
             tmp_src = tmp + os.path.basename(source)
-            module_args = "%s src=%s" % (module_args, tmp_src)
-            if self.runner.check:
+            if 'raw' in module_args:
+                # don't send down raw=no
+                module_args.pop('raw')
+            module_args = "%s src=%s" % (module_args, pipes.quote(tmp_src))
+            if self.runner.noop_on_check(inject):
                 module_args = "%s CHECKMODE=True" % module_args
             return self.runner._execute_module(conn, tmp, 'file', module_args, inject=inject, complex_args=complex_args)
 

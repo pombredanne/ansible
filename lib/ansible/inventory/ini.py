@@ -33,11 +33,11 @@ class InventoryParser(object):
 
     def __init__(self, filename=C.DEFAULT_HOST_LIST):
 
-        fh = open(filename)
-        self.lines = fh.readlines()
-        self.groups = {}
-        self.hosts = {}
-        self._parse()
+        with open(filename) as fh:
+            self.lines = fh.readlines()
+            self.groups = {}
+            self.hosts = {}
+            self._parse()
 
     def _parse(self):
 
@@ -65,19 +65,20 @@ class InventoryParser(object):
 
         for line in self.lines:
             if line.startswith("["):
-                active_group_name = line.replace("[","").replace("]","").strip()
+                active_group_name = line.split(" #")[0].replace("[","").replace("]","").strip()
                 if line.find(":vars") != -1 or line.find(":children") != -1:
                     active_group_name = active_group_name.rsplit(":", 1)[0]
                     if active_group_name not in self.groups:
-                        self.groups[active_group_name] = Group(name=active_group_name)
+                        new_group = self.groups[active_group_name] = Group(name=active_group_name)
+                        all.add_child_group(new_group)
                     active_group_name = None
                 elif active_group_name not in self.groups:
                     new_group = self.groups[active_group_name] = Group(name=active_group_name)
                     all.add_child_group(new_group)
-            elif line.startswith("#") or line == '':
+            elif line.startswith("#") or line.startswith(";") or line == '':
                 pass
             elif active_group_name:
-                tokens = shlex.split(line)
+                tokens = shlex.split(line.split(" #")[0])
                 if len(tokens) == 0:
                     continue
                 hostname = tokens[0]
@@ -111,7 +112,10 @@ class InventoryParser(object):
                         for t in tokens[1:]:
                             if t.startswith('#'):
                                 break
-                            (k,v) = t.split("=")
+                            try:
+                                (k,v) = t.split("=")
+                            except ValueError, e:
+                                raise errors.AnsibleError("Invalid ini entry: %s - %s" % (t, str(e)))
                             host.set_variable(k,v)
                     self.groups[active_group_name].add_host(host)
 
@@ -131,7 +135,7 @@ class InventoryParser(object):
                 group = self.groups.get(line, None)
                 if group is None:
                     group = self.groups[line] = Group(name=line)
-            elif line.startswith("#"):
+            elif line.startswith("#") or line.startswith(";"):
                 pass
             elif line.startswith("["):
                 group = None
@@ -156,7 +160,7 @@ class InventoryParser(object):
                 group = self.groups.get(line, None)
                 if group is None:
                     raise errors.AnsibleError("can't add vars to undefined group: %s" % line)
-            elif line.startswith("#"):
+            elif line.startswith("#") or line.startswith(";"):
                 pass
             elif line.startswith("["):
                 group = None

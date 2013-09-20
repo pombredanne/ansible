@@ -20,7 +20,6 @@
 ########################################################
 
 import sys
-import getpass
 
 from ansible.runner import Runner
 import ansible.constants as C
@@ -28,7 +27,6 @@ from ansible import utils
 from ansible import errors
 from ansible import callbacks
 from ansible import inventory
-
 ########################################################
 
 class Cli(object):
@@ -62,8 +60,6 @@ class Cli(object):
         parser.add_option('-m', '--module-name', dest='module_name',
             help="module name to execute (default=%s)" % C.DEFAULT_MODULE_NAME,
             default=C.DEFAULT_MODULE_NAME)
-        parser.add_option('--list-hosts', dest='listhosts', action='store_true',
-            help="dump out a list of hosts matching input pattern, does not execute any modules!")
 
         options, args = parser.parse_args()
         self.callbacks.options = options
@@ -85,28 +81,28 @@ class Cli(object):
             inventory_manager.subset(options.subset)
         hosts = inventory_manager.list_hosts(pattern)
         if len(hosts) == 0:
-            print >>sys.stderr, "No hosts matched"
+            callbacks.display("No hosts matched", stderr=True)
             sys.exit(1)
 
         if options.listhosts:
             for host in hosts:
-                print '    %s' % host
+                callbacks.display('    %s' % host)
             sys.exit(0)
 
-        if options.module_name == 'command' and not options.module_args:
-            print >>sys.stderr, "No argument passed to command module"
+        if ((options.module_name == 'command' or options.module_name == 'shell')
+                and not options.module_args):
+            callbacks.display("No argument passed to %s module" % options.module_name, color='red', stderr=True)
             sys.exit(1)
 
         sshpass = None
         sudopass = None
         options.ask_pass = options.ask_pass or C.DEFAULT_ASK_PASS
-        if options.ask_pass:
-            sshpass = getpass.getpass(prompt="SSH password: ")
-        options.ask_sudo_pass= options.ask_sudo_pass or C.DEFAULT_ASK_SUDO_PASS
-        if options.ask_sudo_pass:
-            sudopass = getpass.getpass(prompt="sudo password: ")
-            options.sudo = True
-        if options.sudo_user:
+        # Never ask for an SSH password when we run with local connection
+        if options.connection == "local":
+            options.ask_pass = False
+        options.ask_sudo_pass = options.ask_sudo_pass or C.DEFAULT_ASK_SUDO_PASS
+        (sshpass, sudopass) = utils.ask_passwords(ask_pass=options.ask_pass, ask_sudo_pass=options.ask_sudo_pass)
+        if options.sudo_user or options.ask_sudo_pass:
             options.sudo = True
         options.sudo_user = options.sudo_user or C.DEFAULT_SUDO_USER
         if options.tree:
@@ -128,7 +124,7 @@ class Cli(object):
         )
 
         if options.seconds:
-            print "background launch...\n\n"
+            callbacks.display("background launch...\n\n", color='cyan')
             results, poller = runner.run_async(options.seconds)
             results = self.poll_while_needed(poller, options)
         else:
@@ -151,6 +147,10 @@ class Cli(object):
 ########################################################
 
 if __name__ == '__main__':
+    callbacks.display("", log_only=True)
+    callbacks.display(" ".join(sys.argv), log_only=True)
+    callbacks.display("", log_only=True)
+
     cli = Cli()
     (options, args) = cli.parse()
     try:
@@ -159,9 +159,9 @@ if __name__ == '__main__':
             if 'failed' in result or result.get('rc', 0) != 0:
                 sys.exit(2)
         if results['dark']:
-            sys.exit(2)
+            sys.exit(3)
     except errors.AnsibleError, e:
         # Generic handler for ansible specific errors
-        print "ERROR: %s" % str(e)
+        callbacks.display("ERROR: %s" % str(e), stderr=True, color='red')
         sys.exit(1)
 

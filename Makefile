@@ -39,32 +39,30 @@ ifneq ($(shell which git),)
 GIT_DATE := $(shell git log -n 1 --format="%ai")
 endif
 
-ifeq ($(OS), FreeBSD)
-DATE := $(shell date -j -f "%Y-%m-%d %H:%M:%s"  "$(GIT_DATE)" +%Y%m%d%H%M)
-else
-ifeq ($(OS), Darwin)
-DATE := $(shell date -j -f "%Y-%m-%d %H:%M:%S"  "$(GIT_DATE)" +%Y%m%d%H%M)
+ifeq ($(shell echo $(OS) | egrep -c 'Darwin|FreeBSD|OpenBSD'),1)
+DATE := $(shell date -j -r $(shell git log -n 1 --format="%at") +%Y%m%d%H%M)
 else
 DATE := $(shell date --utc --date="$(GIT_DATE)" +%Y%m%d%H%M)
-endif
 endif
 
 # RPM build parameters
 RPMSPECDIR= packaging/rpm
 RPMSPEC = $(RPMSPECDIR)/ansible.spec
-RPMDIST = $(shell rpm --eval '%dist')
+RPMDIST = $(shell rpm --eval '%{?dist}')
 RPMRELEASE = 1
 ifeq ($(OFFICIAL),)
     RPMRELEASE = 0.git$(DATE)
 endif
 RPMNVR = "$(NAME)-$(VERSION)-$(RPMRELEASE)$(RPMDIST)"
 
+NOSETESTS := nosetests
+
 ########################################################
 
 all: clean python
 
 tests:
-	PYTHONPATH=./lib nosetests -d -v
+	PYTHONPATH=./lib $(NOSETESTS) -d -v
 
 # To force a rebuild of the docs run 'touch VERSION && make docs'
 docs: $(MANPAGES) modulepages
@@ -117,6 +115,8 @@ clean:
 	rm -rf deb-build
 	rm -rf docs/json
 	rm -rf docs/js
+	@echo "Cleaning up authors file"
+	rm -f AUTHORS.TXT
 
 python:
 	$(PYTHON) setup.py build
@@ -154,6 +154,7 @@ rpm: rpmcommon
 	--define "_specdir $(RPMSPECDIR)" \
 	--define "_sourcedir %{_topdir}" \
 	--define "_rpmfilename %%{NAME}-%%{VERSION}-%%{RELEASE}.%%{ARCH}.rpm" \
+	--define "__python `which $(PYTHON)`" \
 	-ba rpm-build/$(NAME).spec
 	@rm -f rpm-build/$(NAME).spec
 	@echo "#############################################"
@@ -172,22 +173,10 @@ deb: debian
 # for arch or gentoo, read instructions in the appropriate 'packaging' subdirectory directory
 
 modulepages:
-	PYTHONPATH=./lib hacking/module_formatter.py -A $(VERSION) -t man -o docs/man/man3/ --module-dir=library --template-dir=hacking/templates
-
-modulejson:
-	mkdir -p docs/json
-	PYTHONPATH=./lib hacking/module_formatter.py -A $(VERSION) -t json -o docs/json --module-dir=library --template-dir=hacking/templates
-
-modulejs:
-	mkdir -p docs/js
-	make modulejson
-	PYTHONPATH=./lib hacking/module_formatter.py -A $(VERSION) -t js -o docs/js --module-dir=docs/json --template-dir=hacking/templates
+	PYTHONPATH=./lib $(PYTHON) hacking/module_formatter.py -A $(VERSION) -t man -o docs/man/man3/ --module-dir=library --template-dir=hacking/templates # --verbose
 
 # because this requires Sphinx it is not run as part of every build, those building the RPM and so on can ignore this
 
 webdocs:
-	(cd docsite; make docs)
+	(cd docsite/latest; make docs)
 
-# just for quick testing of all the module docs
-webdocs2:
-	(cd docsite; make modules)

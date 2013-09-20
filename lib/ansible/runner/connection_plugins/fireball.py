@@ -34,7 +34,7 @@ except ImportError:
 class Connection(object):
     ''' ZeroMQ accelerated connection '''
 
-    def __init__(self, runner, host, port, **kwargs):
+    def __init__(self, runner, host, port, *args, **kwargs):
 
         self.runner = runner
 
@@ -73,7 +73,11 @@ class Connection(object):
         vvv("EXEC COMMAND %s" % cmd)
 
         if self.runner.sudo and sudoable:
-            raise errors.AnsibleError("fireball does not use sudo, but runs as whoever it was initiated as.  (That itself is where to use sudo).")
+            raise errors.AnsibleError(
+                "When using fireball, do not specify sudo to run your tasks. " +
+                "Instead sudo the fireball action with sudo. " +
+                "Task will communicate with the fireball already running in sudo mode."
+            )
 
         data = dict(
             mode='command',
