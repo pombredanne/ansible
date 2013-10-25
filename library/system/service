@@ -103,6 +103,7 @@ import tempfile
 import shlex
 import select
 import time
+import string
 
 class Service(object):
     """
@@ -430,7 +431,7 @@ class LinuxService(Service):
                 self.enable_cmd = location['systemctl']
             elif os.path.exists("/etc/init/%s.conf" % self.name):
                 # service is managed by upstart
-                self.enable_cmd = location['update-rc.d']
+                self.enable_cmd = location['initctl']
             elif os.path.exists("/etc/init.d/%s" % self.name):
                 # service is managed by with SysV init scripts, but with update-rc.d
                 self.enable_cmd = location['update-rc.d']
@@ -537,6 +538,37 @@ class LinuxService(Service):
         # to decide whether to run the command here but need something
         # similar for upstart
 
+        if self.enable_cmd.endswith("initctl"):
+            def write_to_override_file(file_name, file_contents, ):
+                override_file = open(file_name, 'w')
+                override_file.write(file_contents)
+                override_file.close()
+
+            initpath = '/etc/init'
+            manreg = re.compile('^manual\s*$', re.M | re.I)
+            conf_file_name = "%s/%s.conf" % (initpath, self.name)
+            override_file_name = "%s/%s.override" % (initpath, self.name)
+
+            # Check to see if files contain the manual line in .conf and fail if True
+            if manreg.search(open(conf_file_name).read()):
+                self.module.fail_json(msg="manual stanza not supported in a .conf file")
+
+            if os.path.exists(override_file_name):
+                override_file_contents = open(override_file_name).read()
+                # Remove manual stanza if present and service enabled
+                if self.enable and manreg.search(override_file_contents):
+                    write_to_override_file(override_file_name, manreg.sub('', override_file_contents))
+                # Add manual stanza if not present and service disabled
+                elif not (self.enable) and not (manreg.search(override_file_contents)):
+                    write_to_override_file(override_file_name, override_file_contents + '\nmanual\n')
+                else:
+                    return
+            # Add file with manual stanza if service disabled
+            elif not (self.enable):
+                write_to_override_file(override_file_name, 'manual\n')
+            else:
+                return
+
         if self.enable_cmd.endswith("chkconfig"):
             (rc, out, err) = self.execute_command("%s --list %s" % (self.enable_cmd, self.name))
             if 'chkconfig --add %s' % self.name in err:
@@ -599,6 +631,12 @@ class LinuxService(Service):
                     self.changed = True
                     break
                 elif not self.enable and line.find('already exist') != -1:
+                    self.changed = True
+                    break
+
+            # Debian compatibility
+            for line in err.splitlines():
+                if self.enable and line.find('no runlevel symlinks to modify') != -1:
                     self.changed = True
                     break
 
@@ -755,8 +793,17 @@ class FreeBsdService(Service):
             self.module.fail_json(msg="unable to determine rcvar")
 
         # In rare cases, i.e. sendmail, rcvar can return several key=value pairs
-        # Usually there is just one, however.
-        self.rcconf_key = rcvars[0].split('=')[0]
+        # Usually there is just one, however.  In other rare cases, i.e. uwsgi,
+        # rcvar can return extra uncommented data that is not at all related to
+        # the rcvar.  We will just take the first key=value pair we come across
+        # and hope for the best.
+        for rcvar in rcvars:
+            if '=' in rcvar:
+                self.rcconf_key = rcvar.split('=')[0]
+                break
+
+        if self.rcconf_key is None:
+            self.module.fail_json(msg="unable to determine rcvar")
 
         return self.service_enable_rcconf()
 
@@ -842,7 +889,7 @@ class NetBsdService(Service):
             if os.path.isfile(rcfile):
                 self.rcconf_file = rcfile
 
-        self.rcconf_key = "%s" % self.name
+        self.rcconf_key = "%s" % string.replace(self.name,"-","_")
 
         return self.service_enable_rcconf()
 
@@ -1070,7 +1117,7 @@ def main():
             state = dict(choices=['running', 'started', 'stopped', 'restarted', 'reloaded']),
             sleep = dict(required=False, type='int', default=None),
             pattern = dict(required=False, default=None),
-            enabled = dict(choices=BOOLEANS, type='bool'),
+            enabled = dict(type='bool'),
             runlevel = dict(required=False, default='default'),
             arguments = dict(aliases=['args'], default=''),
         ),
