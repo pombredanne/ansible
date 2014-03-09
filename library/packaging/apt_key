@@ -124,7 +124,7 @@ def all_keys(module, keyring):
     return results
 
 def key_present(module, key_id):
-    (rc, out, err) = module.run_command("apt-key list | 2>&1 grep -q %s" % key_id)
+    (rc, out, err) = module.run_command("apt-key list | 2>&1 grep -i -q %s" % key_id)
     return rc == 0
 
 def download_key(module, url):
@@ -138,7 +138,7 @@ def download_key(module, url):
             module.fail_json("error connecting to download key from url")
         data = connection.read()
         return data
-    except:
+    except Exception:
         module.fail_json(msg="error getting key id from url", traceback=format_exc())
 
 
@@ -191,7 +191,8 @@ def main():
     if key_id:
         try:
             _ = int(key_id, 16)
-            key_id = key_id.lstrip('0x')
+            if key_id.startswith('0x'):
+                key_id = key_id[2:]
         except ValueError:
             module.fail_json("Invalid key_id")
 
@@ -237,6 +238,6 @@ def main():
 
     module.exit_json(changed=changed, **return_values)
 
-# include magic from lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
+# import module snippets
+from ansible.module_utils.basic import *
 main()

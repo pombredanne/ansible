@@ -32,8 +32,9 @@
 # for playbooks in the following order, stopping at the first match:
 #
 # 1. $workdir/path/playbook.yml, if specified
-# 2. $workdir/$hostname.yml
-# 3. $workdir/local.yml
+# 2. $workdir/$fqdn.yml
+# 3. $workdir/$hostname.yml
+# 4. $workdir/local.yml
 #
 # the source repo must contain at least one of these playbooks.
 
@@ -44,23 +45,19 @@ import sys
 import datetime
 import socket
 from ansible import utils
+from ansible.utils import cmd_functions
+from ansible import errors
 
 DEFAULT_REPO_TYPE = 'git'
 DEFAULT_PLAYBOOK = 'local.yml'
 PLAYBOOK_ERRORS = {1: 'File does not exist',
                     2: 'File is not readable'}
 
+VERBOSITY=0
 
-def _run(cmd):
-    print >>sys.stderr, "Running: '%s'" % cmd
-    cmd = subprocess.Popen(cmd, shell=True,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    (out, err) = cmd.communicate()
-    print out
-    if cmd.returncode != 0:
-        print >>sys.stderr, err
-    return cmd.returncode, out
-
+def increment_debug(option, opt, value, parser):
+    global VERBOSITY
+    VERBOSITY += 1
 
 def try_playbook(path):
     if not os.path.exists(path):
@@ -80,10 +77,12 @@ def select_playbook(path, args):
             return None
         return playbook
     else:
-        hostpb = "%s/%s.yml" % (path, socket.getfqdn())
+        fqdn = socket.getfqdn()
+        hostpb = "%s/%s.yml" % (path, fqdn)
+        shorthostpb = "%s/%s.yml" % (path, fqdn.split('.')[0])
         localpb = "%s/%s" % (path, DEFAULT_PLAYBOOK)
         errors = []
-        for pb in [hostpb, localpb]:
+        for pb in [hostpb, shorthostpb, localpb]:
             rc = try_playbook(pb)
             if rc == 0:
                 playbook = pb
@@ -109,6 +108,8 @@ def main(args):
                            'not be updated')
     parser.add_option('-d', '--directory', dest='dest', default=None,
                       help='directory to checkout repository to')
+    #parser.add_option('-l', '--live', default=True, action='store_live',
+    #                  help='Print the ansible-playbook output while running')
     parser.add_option('-U', '--url', dest='url', default=None,
                       help='URL of the playbook repository')
     parser.add_option('-C', '--checkout', dest='checkout',
@@ -116,15 +117,21 @@ def main(args):
                       'Defaults to behavior of repository module.')
     parser.add_option('-i', '--inventory-file', dest='inventory',
                       help="location of the inventory host file")
+    parser.add_option('-v', '--verbose', default=False, action="callback",
+                      callback=increment_debug,
+                      help='Pass -vvvv to ansible-playbook')
     parser.add_option('-m', '--module-name', dest='module_name',
                       default=DEFAULT_REPO_TYPE,
                       help='Module name used to check out repository.  '
                       'Default is %s.' % DEFAULT_REPO_TYPE)
+    parser.add_option('--vault-password-file', dest='vault_password_file',
+                    help="vault password file")
     options, args = parser.parse_args(args)
 
+    hostname = socket.getfqdn()
     if not options.dest:
-        parser.error("Missing required directory argument")
-        return 1
+        # use a hostname dependent directory, in case of $HOME on nfs
+        options.dest = utils.prepare_writeable_dir('~/.ansible/pull/%s' % hostname)
 
     options.dest = os.path.abspath(options.dest)
 
@@ -136,9 +143,15 @@ def main(args):
     print >>sys.stderr, now.strftime("Starting ansible-pull at %F %T")
 
     inv_opts = 'localhost,'
-    limit_opts = 'localhost:%s:127.0.0.1' % socket.getfqdn()
-    base_opts = '-c local --limit "%s"' % limit_opts
+    limit_opts = 'localhost:%s:127.0.0.1' % hostname
     repo_opts = "name=%s dest=%s" % (options.url, options.dest)
+
+    if VERBOSITY == 0:
+        base_opts = '-c local --limit "%s"' % limit_opts
+    elif VERBOSITY > 0:
+        debug_level = ''.join([ "v" for x in range(0, VERBOSITY) ])
+        base_opts = '-%s -c local --limit "%s"' % (debug_level, limit_opts)
+
     if options.checkout:
         repo_opts += ' version=%s' % options.checkout
     path = utils.plugins.module_finder.find_plugin(options.module_name)
@@ -148,7 +161,10 @@ def main(args):
     cmd = 'ansible all -i "%s" %s -m %s -a "%s"' % (
             inv_opts, base_opts, options.module_name, repo_opts
             )
-    rc, out = _run(cmd)
+
+    # RUN THE CHECKOUT COMMAND
+    rc, out, err = cmd_functions.run_cmd(cmd, live=True)
+
     if rc != 0:
         if options.force:
             print "Unable to update repository. Continuing with (forced) run of playbook."
@@ -165,10 +181,14 @@ def main(args):
         return 1
 
     cmd = 'ansible-playbook %s %s' % (base_opts, playbook)
+    if options.vault_password_file:
+        cmd += " --vault-password-file=%s" % options.vault_password_file
     if options.inventory:
         cmd += ' -i "%s"' % options.inventory
     os.chdir(options.dest)
-    rc, out = _run(cmd)
+
+    # RUN THE PLAYBOOK COMMAND
+    rc, out, err = cmd_functions.run_cmd(cmd, live=True)
 
     if options.purge:
         os.chdir('/')

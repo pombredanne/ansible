@@ -31,8 +31,9 @@ options:
   state:
     description:
       - Whether the tags should be present or absent on the resource.
-    required: true
-    default: null
+    required: false
+    default: present
+    choices: ['present', 'absent']
     aliases: []
   region:
     description:
@@ -58,6 +59,15 @@ options:
     required: false
     default: null
     aliases: []
+  validate_certs:
+    description:
+      - When set to "no", SSL certificates will not be validated for boto versions >= 2.6.0.
+    required: false
+    default: "yes"
+    choices: ["yes", "no"]
+    aliases: []
+    version_added: "1.5"
+
 requirements: [ "boto" ]
 author: Lester Wade
 '''
@@ -101,72 +111,21 @@ except ImportError:
     print "failed=True msg='boto required for this module'"
     sys.exit(1)
 
-AWS_REGIONS = ['ap-northeast-1',
-               'ap-southeast-1',
-               'ap-southeast-2',
-               'eu-west-1',
-               'sa-east-1',
-               'us-east-1',
-               'us-west-1',
-               'us-west-2']
-
 def main():
-    module = AnsibleModule(
-        argument_spec = dict(
+    argument_spec = ec2_argument_spec()
+    argument_spec.update(dict(
             resource = dict(required=True),
             tags = dict(required=True),
-            region = dict(aliases=['aws_region', 'ec2_region'], choices=AWS_REGIONS),
-            state = dict(choices=['present', 'absent']),
-            ec2_url = dict(aliases=['EC2_URL']),
-            aws_secret_key = dict(aliases=['ec2_secret_key', 'secret_key'], no_log=True),
-            aws_access_key = dict(aliases=['ec2_access_key', 'access_key']),
+            state = dict(default='present', choices=['present', 'absent']),
         )
     )
+    module = AnsibleModule(argument_spec=argument_spec)
 
     resource = module.params.get('resource')
     tags = module.params['tags']
-    region = module.params.get('region')
     state = module.params.get('state')
-    ec2_url = module.params.get('ec2_url')
-    aws_secret_key = module.params.get('aws_secret_key')
-    aws_access_key = module.params.get('aws_access_key')
-
-    # allow eucarc environment variables to be used if ansible vars aren't set
-    if not ec2_url and 'EC2_URL' in os.environ:
-        ec2_url = os.environ['EC2_URL']
-
-    if not aws_secret_key:
-        if  'AWS_SECRET_KEY' in os.environ:
-            aws_secret_key = os.environ['AWS_SECRET_KEY']
-        elif 'EC2_SECRET_KEY' in os.environ:
-            aws_secret_key = os.environ['EC2_SECRET_KEY']
-
-    if not aws_access_key:
-        if 'AWS_ACCESS_KEY' in os.environ:
-            aws_access_key = os.environ['AWS_ACCESS_KEY']
-        elif 'EC2_ACCESS_KEY' in os.environ:
-            aws_access_key = os.environ['EC2_ACCESS_KEY']
-
-    if not region:
-        if 'AWS_REGION' in os.environ:
-            region = os.environ['AWS_REGION']
-        elif 'EC2_REGION' in os.environ:
-            region = os.environ['EC2_REGION']
-    
-    # If we have a region specified, connect to its endpoint.
-    if region: 
-        try:
-            ec2 = boto.ec2.connect_to_region(region, aws_access_key_id=aws_access_key, aws_secret_access_key=aws_secret_key)
-        except boto.exception.NoAuthHandlerFound, e:
-            module.fail_json(msg = str(e))
-    # Otherwise, no region so we fallback to the old connection method
-    elif ec2_url:
-        try:
-            ec2 = boto.connect_ec2_endpoint(ec2_url, aws_access_key, aws_secret_key)
-        except boto.exception.NoAuthHandlerFound, e:
-            module.fail_json(msg = str(e))
-    else:
-        module.fail_json(msg="Either region or ec2_url must be specified")
+  
+    ec2 = ec2_connect(module)
     
     # We need a comparison here so that we can accurately report back changed status.
     # Need to expand the gettags return format and compare with "tags" and then tag or detag as appropriate.
@@ -181,7 +140,7 @@ def main():
         tagdict[tag.name] = tag.value
 
     if state == 'present':
-        if set(tags).issubset(set(tagdict)):
+        if set(tags.items()).issubset(set(tagdict.items())):
             module.exit_json(msg="Tags already exists in %s." %resource, changed=False)
         else:
             for (key, value) in set(tags.items()): 
@@ -209,7 +168,8 @@ def main():
 #    })
     sys.exit(0)
 
-# this is magic, see lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
+# import module snippets
+from ansible.module_utils.basic import *
+from ansible.module_utils.ec2 import *
 
 main()

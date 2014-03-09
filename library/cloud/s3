@@ -249,8 +249,8 @@ def is_walrus(s3_url):
         return False
 
 def main():
-    module = AnsibleModule(
-        argument_spec = dict(
+    argument_spec = ec2_argument_keys_spec()
+    argument_spec.update(dict(
             bucket         = dict(required=True),
             object         = dict(),
             src            = dict(),
@@ -258,11 +258,10 @@ def main():
             mode           = dict(choices=['get', 'put', 'delete', 'create', 'geturl', 'getstr'], required=True),
             expiry         = dict(default=600, aliases=['expiration']),
             s3_url         = dict(aliases=['S3_URL']),
-            aws_secret_key  = dict(aliases=['ec2_secret_key', 'secret_key'], no_log=True, required=False),
-            aws_access_key  = dict(aliases=['ec2_access_key', 'access_key'], required=False),
             overwrite      = dict(aliases=['force'], default=True, type='bool'),
-        ),
+        )
     )
+    module = AnsibleModule(argument_spec=argument_spec)
 
     bucket = module.params.get('bucket')
     obj = module.params.get('object')
@@ -272,9 +271,9 @@ def main():
     mode = module.params.get('mode')
     expiry = int(module.params['expiry'])
     s3_url = module.params.get('s3_url')
-    aws_secret_key = module.params.get('aws_secret_key')
-    aws_access_key = module.params.get('aws_access_key')
     overwrite = module.params.get('overwrite')
+
+    ec2_url, aws_access_key, aws_secret_key, region = get_ec2_creds(module)
     
     if module.params.get('object'):
         obj = os.path.expanduser(module.params['object'])
@@ -282,18 +281,6 @@ def main():
     # allow eucarc environment variables to be used if ansible vars aren't set
     if not s3_url and 'S3_URL' in os.environ:
         s3_url = os.environ['S3_URL']
-
-    if not aws_secret_key:
-        if  'AWS_SECRET_KEY' in os.environ:
-            aws_secret_key = os.environ['AWS_SECRET_KEY']
-        elif 'EC2_SECRET_KEY' in os.environ:
-            aws_secret_key = os.environ['EC2_SECRET_KEY']
-
-    if not aws_access_key:
-        if 'AWS_ACCESS_KEY' in os.environ:
-            aws_access_key = os.environ['AWS_ACCESS_KEY']
-        elif 'EC2_ACCESS_KEY' in os.environ:
-            aws_access_key = os.environ['EC2_ACCESS_KEY']
 
     # If we have an S3_URL env var set, this is likely to be Walrus, so change connection method
     if is_walrus(s3_url):
@@ -343,10 +330,6 @@ def main():
                 else:
                     module.fail_json(msg="WARNING: Checksums do not match. Use overwrite parameter to force download.", failed=True)
         
-        # If destination file doesn't already exist we can go ahead and download.
-        if pathrtn is False:
-            download_s3file(module, s3, bucket, obj, dest)
-   
         # Firstly, if key_matches is TRUE and overwrite is not enabled, we EXIT with a helpful message. 
         if sum_matches is True and overwrite is False:
             module.exit_json(msg="Local and remote object are identical, ignoring. Use overwrite parameter to force.", changed=False)
@@ -467,8 +450,8 @@ def main():
 
     module.exit_json(failed=False)
 
-
-# this is magic, see lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
+# import module snippets
+from ansible.module_utils.basic import *
+from ansible.module_utils.ec2 import *
 
 main()

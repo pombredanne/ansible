@@ -19,6 +19,7 @@
 DOCUMENTATION = '''
 ---
 module: gce_pd
+version_added: "1.4"
 short_description: utilize GCE persistent disk resources
 description:
     - This module can create and destroy unformatted GCE persistent disks
@@ -74,6 +75,27 @@ options:
     required: false
     default: "us-central1-b"
     aliases: []
+  service_account_email:
+    version_added: 1.5.1
+    description:
+      - service account email
+    required: false
+    default: null
+    aliases: []
+  pem_file:
+    version_added: 1.5.1
+    description:
+      - path to the pem file associated with the service account email
+    required: false
+    default: null
+    aliases: []
+  project_id:
+    version_added: 1.5.1
+    description:
+      - your GCE project ID
+    required: false
+    default: null
+    aliases: []
 
 requirements: [ "libcloud" ]
 author: Eric Johnson <erjohnso@google.com>
@@ -81,47 +103,26 @@ author: Eric Johnson <erjohnso@google.com>
 
 EXAMPLES = '''
 # Simple attachment action to an existing instance
-- local_action: 
-    module: gce_pd 
+- local_action:
+    module: gce_pd
     instance_name: notlocalhost
-    size_gb: 5 
+    size_gb: 5
     name: pd
 '''
 
 import sys
 
-USER_AGENT_PRODUCT="Ansible-gce_pd"
-USER_AGENT_VERSION="v1beta15"
-
-try:                                                                            
-    from libcloud.compute.types import Provider                                 
-    from libcloud.compute.providers import get_driver                           
+try:
+    from libcloud.compute.types import Provider
+    from libcloud.compute.providers import get_driver
     from libcloud.common.google import GoogleBaseError, QuotaExceededError, \
             ResourceExistsError, ResourceNotFoundError, ResourceInUseError
-    _ = Provider.GCE                                                            
-except ImportError:                                                             
+    _ = Provider.GCE
+except ImportError:
     print("failed=True " + \
         "msg='libcloud with GCE support is required for this module.'")
-    sys.exit(1)                                                                 
-                                                                                
-# Load in the libcloud secrets file                                             
-try:                                                                            
-    import secrets                                                              
-except ImportError:                                                             
-    secrets = None                                                              
-ARGS = getattr(secrets, 'GCE_PARAMS', ())                                       
-KWARGS = getattr(secrets, 'GCE_KEYWORD_PARAMS', {})                             
-
-if not ARGS or not 'project' in KWARGS:
-    print("failed=True " + \
-        "msg='Missing GCE connection parameters in libcloud secrets file.'")
     sys.exit(1)
 
-def unexpected_error_msg(error):
-    msg='Unexpected response: HTTP return_code['
-    msg+='%s], API error code[%s] and message: %s' % (
-        error.http_code, error.code, str(error.value))
-    return msg
 
 def main():
     module = AnsibleModule(
@@ -134,8 +135,13 @@ def main():
             size_gb = dict(default=10),
             state = dict(default='present'),
             zone = dict(default='us-central1-b'),
+            service_account_email = dict(),
+            pem_file = dict(),
+            project_id = dict(),
         )
     )
+
+    gce = gce_connect(module)
 
     detach_only = module.params.get('detach_only')
     instance_name = module.params.get('instance_name')
@@ -149,13 +155,6 @@ def main():
         module.fail_json(
             msg='Must specify an instance name when detaching a disk',
             changed=False)
-
-    try:
-        gce = get_driver(Provider.GCE)(*ARGS, datacenter=zone, **KWARGS)
-        gce.connection.user_agent_append("%s/%s" % (
-                USER_AGENT_PRODUCT, USER_AGENT_VERSION))
-    except Exception as e:
-        module.fail_json(msg=unexpected_error_msg(e), changed=False)
 
     disk = inst = None
     changed = is_attached = False
@@ -184,7 +183,7 @@ def main():
         json_output['size_gb'] = int(disk.size)
     except ResourceNotFoundError:
         pass
-    except Exception as e:
+    except Exception, e:
         module.fail_json(msg=unexpected_error_msg(e), changed=False)
 
     # user wants a disk to exist.  If "instance_name" is supplied the user
@@ -213,14 +212,14 @@ def main():
             except QuotaExceededError:
                 module.fail_json(msg='Requested disk size exceeds quota',
                         changed=False)
-            except Exception as e:
+            except Exception, e:
                 module.fail_json(msg=unexpected_error_msg(e), changed=False)
             json_output['size_gb'] = size_gb
             changed = True
         if inst and not is_attached:
             try:
                 gce.attach_volume(inst, disk, device=name, ex_mode=mode)
-            except Exception as e:
+            except Exception, e:
                 module.fail_json(msg=unexpected_error_msg(e), changed=False)
             json_output['attached_to_instance'] = inst.name
             json_output['attached_mode'] = mode
@@ -232,15 +231,15 @@ def main():
         if inst and is_attached:
             try:
                 gce.detach_volume(disk, ex_node=inst)
-            except Exception as e:
+            except Exception, e:
                 module.fail_json(msg=unexpected_error_msg(e), changed=False)
             changed = True
         if not detach_only:
             try:
                 gce.destroy_volume(disk)
-            except ResourceInUseError as e:
+            except ResourceInUseError, e:
                 module.fail_json(msg=str(e.value), changed=False)
-            except Exception as e:
+            except Exception, e:
                 module.fail_json(msg=unexpected_error_msg(e), changed=False)
             changed = True
 
@@ -248,7 +247,8 @@ def main():
     print json.dumps(json_output)
     sys.exit(0)
 
-# this is magic, see lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
+# import module snippets
+from ansible.module_utils.basic import *
+from ansible.module_utils.gce import *
 
 main()

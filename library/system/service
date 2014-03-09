@@ -272,7 +272,7 @@ class Service(object):
         if self.state and self.running is None:
             self.module.fail_json(msg="failed determining service state, possible typo of service name?")
         # Find out if state has changed
-        if not self.running and self.state in ["started", "running"]:
+        if not self.running and self.state in ["started", "running", "reloaded"]:
             self.svc_change = True
         elif self.running and self.state in ["stopped","reloaded"]:
             self.svc_change = True
@@ -287,6 +287,8 @@ class Service(object):
         if self.svc_change:
             # Control service
             if self.state in ['started', 'running']:
+                self.action = "start"
+            elif not self.running and self.state == 'reloaded':
                 self.action = "start"
             elif self.state == 'stopped':
                 self.action = "stop"
@@ -323,7 +325,7 @@ class Service(object):
             if len(rcarray) >= 1 and '=' in rcarray[0]:
                 (key, value) = rcarray[0].split("=", 1)
                 if key == self.rcconf_key:
-                    if value == self.rcconf_value:
+                    if value.upper() == self.rcconf_value:
                         # Since the proper entry already exists we can stop iterating.
                         changed = False
                         break
@@ -429,10 +431,10 @@ class LinuxService(Service):
             if check_systemd(self.name):
                 # service is managed by systemd
                 self.enable_cmd = location['systemctl']
-            elif os.path.exists("/etc/init/%s.conf" % self.name):
+            elif location['initctl'] and os.path.exists("/etc/init/%s.conf" % self.name):
                 # service is managed by upstart
                 self.enable_cmd = location['initctl']
-            elif os.path.exists("/etc/init.d/%s" % self.name):
+            elif location['update-rc.d'] and os.path.exists("/etc/init.d/%s" % self.name):
                 # service is managed by with SysV init scripts, but with update-rc.d
                 self.enable_cmd = location['update-rc.d']
             else:
@@ -647,7 +649,7 @@ class LinuxService(Service):
                 return
 
             if self.enable:
-                # make sure the init.d symlinks are created 
+                # make sure the init.d symlinks are created
                 # otherwise enable might not work
                 (rc, out, err) = self.execute_command("%s %s defaults" \
                                                       % (self.enable_cmd, self.name))
@@ -782,15 +784,17 @@ class FreeBsdService(Service):
         else:
             self.rcconf_value = "NO"
 
-        rcfiles = [ '/etc/rc.conf','/usr/local/etc/rc.conf' ]
+        rcfiles = [ '/etc/rc.conf','/etc/rc.conf.local', '/usr/local/etc/rc.conf' ]
         for rcfile in rcfiles:
             if os.path.isfile(rcfile):
                 self.rcconf_file = rcfile
 
         rc, stdout, stderr = self.execute_command("%s %s %s %s" % (self.svc_cmd, self.name, 'rcvar', self.arguments))
+        cmd = "%s %s %s %s" % (self.svc_cmd, self.name, 'rcvar', self.arguments)
         rcvars = shlex.split(stdout, comments=True)
+
         if not rcvars:
-            self.module.fail_json(msg="unable to determine rcvar")
+            self.module.fail_json(msg="unable to determine rcvar", stdout=stdout, stderr=stderr)
 
         # In rare cases, i.e. sendmail, rcvar can return several key=value pairs
         # Usually there is just one, however.  In other rare cases, i.e. uwsgi,
@@ -803,7 +807,7 @@ class FreeBsdService(Service):
                 break
 
         if self.rcconf_key is None:
-            self.module.fail_json(msg="unable to determine rcvar")
+            self.module.fail_json(msg="unable to determine rcvar", stdout=stdout, stderr=stderr)
 
         return self.service_enable_rcconf()
 
@@ -1203,7 +1207,5 @@ def main():
 
     module.exit_json(**result)
 
-# this is magic, see lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
-
+from ansible.module_utils.basic import *
 main()

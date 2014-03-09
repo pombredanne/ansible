@@ -29,7 +29,7 @@ class ActionModule(object):
 
     ### We need to be able to modify the inventory
     BYPASS_HOST_LOOP = True
-    NEEDS_TMPPATH = False
+    TRANSFERS_FILES = False
 
     def __init__(self, runner):
         self.runner = runner
@@ -85,6 +85,13 @@ class ActionModule(object):
                     inventory.add_group(new_group)
                 grp = inventory.get_group(group_name)
                 grp.add_host(new_host)
+
+                # add this host to the group cache
+                if inventory._groups_list is not None:
+                    if group_name in inventory._groups_list:
+                        if new_host.name not in inventory._groups_list[group_name]:
+                            inventory._groups_list[group_name].append(new_host.name)
+
                 vv("added host to group via add_host module: %s" % group_name)
             result['new_groups'] = groupnames.split(",")
             

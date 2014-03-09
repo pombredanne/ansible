@@ -59,9 +59,7 @@ options:
         choices: [ "yes", "no" ]
     purge:
         description:
-            - Deletes untracked files. Runs C(hg purge). Note this requires C(purge) extension to
-              be enabled if C(purge=yes). This module will modify hgrc file on behalf of the user
-              and undo the changes before exiting the task.
+            - Deletes untracked files. Runs C(hg purge).
         required: false
         default: "no"
         choices: [ "yes", "no" ]
@@ -73,12 +71,10 @@ options:
             - Path to hg executable to use. If not supplied,
               the normal mechanism for resolving binary paths will be used.
 notes:
-    - If the task seems to be hanging, first verify remote host is in C(known_hosts).
-      SSH will prompt user to authorize the first contact with a remote host. One solution is to add
-      C(StrictHostKeyChecking no) in C(.ssh/config) which will accept and authorize the connection
-      on behalf of the user. However, if you run as a different user such as setting sudo to True),
-      for example, root will not look at the user .ssh/config setting.
-
+    - "If the task seems to be hanging, first verify remote host is in C(known_hosts).
+      SSH will prompt user to authorize the first contact with a remote host.  To avoid this prompt, 
+      one solution is to add the remote host public key in C(/etc/ssh/ssh_known_hosts) before calling 
+      the hg module, with the following command: ssh-keyscan remote_host.com >> /etc/ssh/ssh_known_hosts."
 requirements: [ ]
 '''
 
@@ -86,36 +82,6 @@ EXAMPLES = '''
 # Ensure the current working copy is inside the stable branch and deletes untracked files if any.
 - hg: repo=https://bitbucket.org/user/repo1 dest=/home/user/repo1 revision=stable purge=yes
 '''
-
-def _set_hgrc(hgrc, vals):
-    parser = ConfigParser.SafeConfigParser()
-    parser.read(hgrc)
-
-    # val is a list of triple-tuple of the form [(section, option, value),...]
-    for each in vals:
-        (section, option, value) = each
-        if not parser.has_section(section):
-            parser.add_section(section)
-        parser.set(section, option, value)
-
-    f = open(hgrc, 'w')
-    parser.write(f)
-    f.close()
-
-
-def _undo_hgrc(hgrc, vals):
-    parser = ConfigParser.SafeConfigParser()
-    parser.read(hgrc)
-
-    for each in vals:
-        (section, option, value) = each
-        if parser.has_section(section):
-            parser.remove_option(section, option)
-
-    f = open(hgrc, 'w')
-    parser.write(f)
-    f.close()
-
 
 class Hg(object):
 
@@ -131,7 +97,8 @@ class Hg(object):
         return (rc, out, err)
 
     def _list_untracked(self):
-        return self._command(['purge', '-R', self.dest, '--print'])
+        args = ['purge', '--config', 'extensions.purge=', '-R', self.dest, '--print']
+        return self._command(args)
 
     def get_revision(self):
         """
@@ -170,10 +137,6 @@ class Hg(object):
             return True
 
     def purge(self):
-        hgrc = os.path.join(self.dest, '.hg/hgrc')
-        purge_option = [('extensions', 'purge', '')]
-        _set_hgrc(hgrc, purge_option)   # enable purge extension
-
         # before purge, find out if there are any untracked files
         (rc1, out1, err1) = self._list_untracked()
         if rc1 != 0:
@@ -181,10 +144,9 @@ class Hg(object):
 
         # there are some untrackd files
         if out1 != '':
-            (rc2, out2, err2) = self._command(['purge', '-R', self.dest])
-            if rc2 == 0:
-                _undo_hgrc(hgrc, purge_option)
-            else:
+            args = ['purge', '--config', 'extensions.purge=', '-R', self.dest]
+            (rc2, out2, err2) = self._command(args)
+            if rc2 != 0:
                 self.module.fail_json(msg=err2)
             return True
         else:
@@ -205,7 +167,7 @@ class Hg(object):
 
     def pull(self):
         return self._command(
-            ['pull', '-r', self.revision, '-R', self.dest, self.repo])
+            ['pull', '-R', self.dest, self.repo])
 
     def update(self):
         return self._command(['update', '-R', self.dest])
@@ -271,6 +233,6 @@ def main():
         changed = True
     module.exit_json(before=before, after=after, changed=changed, cleaned=cleaned)
 
-# include magic from lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
+# import module snippets
+from ansible.module_utils.basic import *
 main()

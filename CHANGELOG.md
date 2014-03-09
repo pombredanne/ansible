@@ -1,7 +1,113 @@
 Ansible Changes By Release
 ==========================
 
-1.4 "Could This Be Magic" - Release pending!
+## 1.6 "And the Cradle Will Rock" - Active Development
+
+Major features/changes:
+
+* The deprecated legacy variable templating system has been finally removed.  Use {{ foo }} always not $foo or ${foo}.
+* Any data file can also be JSON.  Use sparingly -- with great power comes great responsibility.  Starting file with "{" or "[" denotes JSON.
+
+New Modules:
+
+* packaging: cpanm
+* system: debconf
+
+Other notable changes:
+
+* info pending
+
+## 1.5 "Love Walks In" - Feb 28, 2014
+
+Major features/changes:
+
+* when_foo which was previously deprecated is now removed, use "when:" instead.  Code generates appropriate error suggestion.
+* include + with_items which was previously deprecated is now removed, ditto.  Use with_nested / with_together, etc.
+* only_if, which is much older than when_foo and was deprecated, is similarly removed.
+* ssh connection plugin is now more efficient if you add 'pipelining=True' in ansible.cfg under [ssh_connection], see example.cfg
+* localhost/127.0.0.1 is not required to be in inventory if referenced, if not in inventory, it does not implicitly appear in the 'all' group.
+* git module has new parameters (accept_hostkey, key_file, ssh_opts) to ease the usage of git and ssh protocols. 
+* when using accelerate mode, the daemon will now be restarted when specifying a different remote_user between plays.
+* added no_log: option for tasks. When used, no logging information will be sent to syslog during the module execution.
+* acl module now handles 'default' and allows for either shorthand entry or specific fields per entry section
+* play_hosts is a new magic variable to provide a list of hosts in scope for the current play.
+* ec2 module now accepts 'exact_count' and 'count_tag' as a way to enforce a running number of nodes by tags.
+* all ec2 modules that work with Eucalyptus also now support a 'validate_certs' option, which can be set to 'off' for installations using self-signed certs.
+* Start of new integration test infrastructure (WIP, more details TBD)
+* if repoquery is unavailble, the yum module will automatically attempt to install yum-utils
+* ansible-vault: a framework for encrypting your playbooks and variable files 
+* added support for privilege escalation via 'su' into bin/ansible and bin/ansible-playbook and associated keywords 'su', 'su_user', 'su_pass' for tasks/plays
+
+New modules:
+
+* cloud: ec2_elb_lb
+* cloud: ec2_key
+* cloud: ec2_snapshot
+* cloud: rax_dns
+* cloud: rax_dns_record
+* cloud: rax_files
+* cloud: rax_files_objects
+* cloud: rax_keypair
+* cloud: rax_queue
+* cloud: docker_image
+* messaging: rabbitmq_policy
+* system: at
+* utilities: assert
+
+Other notable changes (many new module params & bugfixes may not not listed):
+
+* no_reboot is now defaulted to "no" in the ec2_ami module to ensure filesystem consistency in the resulting AMI.
+* sysctl module overhauled
+* authorized_key module overhauled
+* synchronized module now handles local transport better
+* apt_key module now ignores case on keys
+* zypper_repository now skips on check mode
+* file module now responds to force behavior when dealing with hardlinks
+* new lookup plugin 'csvfile'
+* fixes to allow hash_merge behavior to work with dynamic inventory
+* mysql module will use port argument on dump/import
+* subversion module now ignores locale to better intercept status messages
+* rax api_key argument is no longer logged
+* backwards/forwards compatibility for OpenStack modules, 'quantum' modules grok neutron renaming
+* hosts properly uniqueified if appearing in redundant groups
+* hostname module support added for ScientificLinux
+* ansible-pull can now show live stdout and pass verbosity levels to ansible-playbook
+* ec2 instances can now be stopped or started
+* additional volumes can be created when creating new ec2 instances
+* user module can move a home directory
+* significant enhancement and cleanup of rackspace modules
+* ansible_ssh_private_key_file can be templated
+* docker module updated to support docker-py 0.3.0
+* various other bug fixes
+* md5 logic improved during sudo operation
+* support for ed25519 keys in authorized_key module
+* ability to set directory permissions during a recursive copy (directory_mode parameter)
+
+## 1.4.5 "Could This Be Magic" - February 12, 2014
+
+- fixed issue with permissions being incorrect on fireball/accelerate keys when the umask setting was too loose.
+
+## 1.4.4 "Could This Be Magic" - January 6, 2014
+
+- fixed a minor issue with newer versions of pip dropping the "use-mirrors" parameter.
+
+## 1.4.3 "Could This Be Magic" - December 20, 2013
+
+- Fixed role_path parsing from ansible.cfg
+- Fixed default role templates
+
+## 1.4.2 "Could This Be Magic" - December 18, 2013
+
+* Fixed a few bugs related to unicode
+* Fixed errors in the ssh connection method with large data returns
+* Miscellaneous fixes for a few modules
+* Add the ansible-galaxy command
+
+## 1.4.1 "Could This Be Magic" - November 27, 2013
+
+* Misc fixes to accelerate mode and various modules.
+
+## 1.4 "Could This Be Magic" - November 21, 2013
 
 Highlighted new features:
 
@@ -17,18 +123,45 @@ Highlighted new features:
 * Includes with parameters can now be done like roles for consistency:  - { include: song.yml, year:1984, song:'jump' }
 * The name of each role is now shown before each task if roles are being used
 * Adds a "var=" option to the debug module for debugging variable data.  "debug: var=hostvars['hostname']" and "debug: var=foo" are all valid syntax.
-* Variables in {{ format }} can fully reference each other and preserve types, template engine is 2x as fast.
+* Variables in {{ format }} can be used as references even if they are structured data
+* Can force binding of accelerate to ipv6 ports.
+* the apt module will auto-install python-apt if not present rather than requiring a manual installation
+* the copy module is now recursive if the local 'src' parameter is a directory.
+* syntax checks now scan included task and variable files as well as main files
 
-New modules and plugins:
+New modules and plugins.
 
-* cloud:ec2_eip -- manage AWS elastic IPs
-* cloud:rax_clb -- manage Rackspace cloud load balancers
-* cloud:ovirt -- VM lifecycle controls for ovirt
+* cloud: ec2_eip -- manage AWS elastic IPs
+* cloud: ec2_vpc -- manage ec2 virtual private clouds
+* cloud: elasticcache -- Manages clusters in Amazon Elasticache
+* cloud: rax_network -- sets up Rackspace networks
+* cloud: rax_facts: retrieve facts about a Rackspace Cloud Server
+* cloud: rax_clb_nodes -- manage Rackspace cloud load balanced nodes
+* cloud: rax_clb -- manages Rackspace cloud load balancers
+* cloud: docker - instantiates/removes/manages docker containers
+* cloud: ovirt -- VM lifecycle controls for ovirt
 * files: acl -- set or get acls on a file
+* files: unarchive: pushes and extracts tarballs
+* files: synchronize: a useful wraper around rsyncing trees of files
 * system: firewalld -- manage the firewalld configuration
-* system: host -- manage `/etc/hosts` file entries
 * system: modprobe -- manage kernel modules on systems that support modprobe/rmmod
 * system: open_iscsi -- manage targets on an initiator using open-iscsi
+* system: blacklist: add or remove modules from the kernel blacklist
+* system: hostname - sets the systems hostname
+* utilities: include_vars -- dynamically load variables based on conditions.
+* packaging: zypper_repository - adds or removes Zypper repositories
+* packaging: urpmi - work with urpmi packages
+* packaging: swdepot - a module for working with swdepot
+* notification: grove - notifies to Grove hosted IRC channels
+* web_infrastructure: ejabberd_user: add and remove users to ejabberd
+* web_infrastructure: jboss: deploys or undeploys apps to jboss
+* source_control: github_hooks: manages GitHub service hooks 
+* net_infrastructure: bigip_monitor_http: manages F5 BIG-IP LTM http monitors
+* net_infrastructure: bigip_monitor_tcp: manages F5 BIG-IP LTM TCP monitors
+* net_infrastructure: bigip_pool_member: manages F5 BIG-IP LTM pool members
+* net_infrastructure: bigip_node: manages F5 BIG-IP LTM nodes
+* net_infrastructure: openvswitch_port
+* net_infrastructure: openvswitch_bridge
 
 Plugins:
 
@@ -38,8 +171,11 @@ Plugins:
 * added md5 as a Jinja2 filter:  {{ path | md5 }}
 * added a fileglob filter that will return files matching a glob pattern.  with_items: "/foo/pattern/*.txt | fileglob"
 * 'changed' filter returns whether a previous step was changed easier.  when: registered_result | changed
+* DOCS NEEDED: 'unique' and 'intersect' filters are added for dealing with lists.
+* DOCS NEEDED: new lookup plugin added for etcd
+* a 'func' connection type to help people migrating from func/certmaster.
 
-Misc changes:
+Misc changes (all module additions/fixes may not listed):
 
 * (docs pending) New features for accelerate mode: configurable timeouts and a keepalives for long running tasks.
 * Added a `delimiter` field to the assemble module.
@@ -51,10 +187,10 @@ Misc changes:
 * Added parameter to allow the fetch module to skip the md5 validation step ('validate_md5=false'). This is usefull when fetching files that are actively being written to, such as live log files.
 * Inventory hosts are used in the order they appear in the inventory.
 * in hosts: foo[2-5] type syntax, the iterators now are zero indexed and the last index is non-inclusive, to match Python standards.
-* There's now a way for a callback plugin to disable itself.  See osx_say example code for an example.
+* There is now a way for a callback plugin to disable itself.  See osx_say example code for an example.
 * Many bugfixes to modules of all types.
 * Complex arguments now can be used with async tasks
-* SSH ControlPath is now configurable in ansible.cfg.  There's a limit to the lengths of these paths, see how to shorten them in ansible.cfg.
+* SSH ControlPath is now configurable in ansible.cfg.  There is a limit to the lengths of these paths, see how to shorten them in ansible.cfg.
 * md5sum support on AIX with csum.
 * Extremely large documentation refactor into subchapters
 * Added 'append_privs' option to the mysql_user module
@@ -62,28 +198,53 @@ Misc changes:
 * Fixes for IPv6 addresses in inventory text files
 * name of executable can be passed to pip/gem etc, for installing under *different* interpreters
 * copy of ./hacking/env-setup added for fish users, ./hacking/env-setup.fish
+* file module more tolerant of non-absolute paths in softlinks.
+* miscellaneous fixes/upgrades to async polling logic.
+* conditions on roles now pass to dependent roles
+* ansible_sudo_pass can be set in a host variable if desired
+* misc fixes for the pip an easy_install modules
+* support for running handlers that have parameterized names based on role parameters
+* added support for compressing MySQL dumps and extracting during import
+* Boto version compatibility fixes for the EC2 inventory script
+* in the EC2 inventory script, a group 'EC2' and 'RDS' contains EC2 and RDS hosts.
+* umask is enforced by the cron module
+* apt packages that are not-removed and not-upgraded do not count as changes
+* the assemble module can now use src files from the local server and copy them over dynamically
+* authorization code has been standardized between Amazon cloud modules
+* the wait_for module can now also wait for files to exist or a regex string to exist in a file
+* leading ranges are now allowed in ranged hostname patterns, ex: [000-250].example.com
+* pager support added to ansible-doc (so it will auto-invoke less, etc)
+* misc fixes to the cron module
+* get_url module now understands content-disposition headers for deciding filenames
+* it is possible to have subdirectories in between group_vars/ and host_vars/ and the final filename, like host_vars/rack42/asdf for the variables for host 'asdf'.  The intermediate directories are ignored, and do not put a file in there twice.
 
-1.3.3 "Top of the World" (reprise) - October 9, 2013
+## 1.3.4 "Top of the World" (reprise) - October 29, 2013
+
+* Fixed a bug in the copy module, where a filename containing the string "raw" was handled incorrectly
+* Fixed a bug in accelerate mode, where copying a zero-length file out would fail
+
+## 1.3.3 "Top of the World" (reprise) - October 9, 2013
 
 Additional fixes for accelerate mode.
 
-1.3.2 "Top of the World" (reprise) - September 19th, 2013
+## 1.3.2 "Top of the World" (reprise) - September 19th, 2013
 
 Multiple accelerate mode fixes:
-Make packet reception less greedy, so multiple frames of data are not consumed by one call.
-Adding two timeout values (one for connection and one for data reception timeout).
-Added keepalive packets, so async mode is no longer required for long-running tasks.
-Modified accelerate daemon to use the verbose logging level of the ansible command that started it.
-Fixed bug where accelerate would not work in check-mode.
-Added a -vvvv level, which will show SSH client debugging information in the event of a failure.
-Fixed bug in apt_repository module where the repository cache was not being updated.
-Fixed bug where "too many open files" errors would be encountered due to pseudo TTY's not being closed properly.
 
-1.3.1 "Top of the World" (reprise) - September 16th, 2013
+* Make packet reception less greedy, so multiple frames of data are not consumed by one call.
+* Adding two timeout values (one for connection and one for data reception timeout).
+* Added keepalive packets, so async mode is no longer required for long-running tasks.
+* Modified accelerate daemon to use the verbose logging level of the ansible command that started it.
+* Fixed bug where accelerate would not work in check-mode.
+* Added a -vvvv level, which will show SSH client debugging information in the event of a failure.
+* Fixed bug in apt_repository module where the repository cache was not being updated.
+* Fixed bug where "too many open files" errors would be encountered due to pseudo TTY's not being closed properly.
+
+## 1.3.1 "Top of the World" (reprise) - September 16th, 2013
 
 Fixing a bug in accelerate mode whereby the gather_facts step would always be run via sudo regardless of the play settings.
 
-1.3 "Top of the World" - September 13th, 2013
+## 1.3 "Top of the World" - September 13th, 2013
 
 Highlighted new features:
 
@@ -223,12 +384,12 @@ Misc changes:
 * added new example inventory plugin for Red Hat OpenShift
 * and other misc. bugfixes
 
-1.2.3 "Hear About It Later" (reprise) -- Aug 21, 2013
+## 1.2.3 "Hear About It Later" (reprise) -- Aug 21, 2013
 
 * Local security fixes for predictable file locations for ControlPersist and retry file paths on shared machines
 on operating systems without kernel symlink/hardlink protections.
 
-1.2.2 "Hear About It Later" (reprise) -- July 4, 2013
+## 1.2.2 "Hear About It Later" (reprise) -- July 4, 2013
 
 * Added a configuration file option [paramiko_connection] record_host_keys which allows the code that paramiko uses
 to update known_hosts to be disabled.  This is done because paramiko can be very slow at doing this if you have a
@@ -236,7 +397,7 @@ large number of hosts and some folks may not want this behavior.  This can be to
 and does not affect the ssh transport plugin.  Use of the ssh transport plugin is preferred if you have ControlPersist
 capability, and Ansible by default in 1.2.1 and later will autodetect.
 
-1.2.1 "Hear About It Later" -- July 4, 2013
+## 1.2.1 "Hear About It Later" -- July 4, 2013
 
 * Connection default is now "smart", which discovers if the system openssh can support ControlPersist, and uses
   it if so, if not falls back to paramiko.
@@ -245,7 +406,7 @@ capability, and Ansible by default in 1.2.1 and later will autodetect.
 * Paramiko now records host keys it was in contact with host key checking is on.  It is somewhat sluggish when doing this,
   so switch to the 'ssh' transport if this concerns you.
 
-1.2 "Right Now" -- June 10, 2013
+## 1.2 "Right Now" -- June 10, 2013
 
 Core Features:
 
@@ -380,7 +541,7 @@ the variable is still registered for the host, with the attribute skipped: True.
 * NetBSD and OpenBSD support for the user and groups modules
 * Add encrypted password support to password lookup
 
-1.1 "Mean Street" -- 4/2/2013
+## 1.1 "Mean Street" -- 4/2/2013
 
 Core Features
 
@@ -519,7 +680,7 @@ Plugins:
 * fixed ~ expansion for fileglob
 * with_nested allows for nested loops (see examples in examples/playbooks)
 
-1.0 "Eruption" -- Feb 1 2013
+## 1.0 "Eruption" -- Feb 1 2013
 
 New modules:
 
@@ -598,7 +759,7 @@ Inventory files/scripts:
 * whitespace is now allowed around group variables in the inventory file
 * inventory scripts can now define groups of groups and group vars (need example for docs?)
 
-0.9 "Dreams" -- Nov 30 2012
+## 0.9 "Dreams" -- Nov 30 2012
 
 Highlighted core changes:
 
@@ -678,7 +839,7 @@ Plugin changes:
 * various tweaks to the EC2 inventory plugin
 * jinja2 filters are now pluggable so it's easy to write your own (to_json/etc, are now impl. as such)
 
-0.8 "Cathedral" -- Oct 19, 2012
+## 0.8 "Cathedral" -- Oct 19, 2012
 
 Highlighted Core Changes:
 
@@ -704,7 +865,7 @@ Other Core Changes:
 * ability to access inventory variables via 'hostvars' for hosts not yet included in any play, using on demand lookups
 * merged ansible-plugins, ansible-resources, and ansible-docs into the main project
 * you can set ANSIBLE_NOCOWS=1 if you want to disable cowsay if it is installed.  Though no one should ever want to do this!  Cows are great!
-* you can set ANSIBLE_FORCECOLOR=1 to force color mode even when running without a TTY
+* you can set ANSIBLE_FORCE_COLOR=1 to force color mode even when running without a TTY
 * fatal errors are now properly colored red.
 * skipped messages are now cyan, to differentiate them from unchanged messages.
 * extensive documentation upgrades
@@ -775,7 +936,7 @@ Other module Changes, Upgrades, and Fixes:
 * selinux policy is only required if setting to not disabled
 * various fixes for yum module when working with packages not in any present repo
 
-0.7 "Panama" -- Sept 6 2012
+## 0.7 "Panama" -- Sept 6 2012
 
 Module changes:
 
@@ -839,7 +1000,7 @@ Playbooks:
 * adds 'serial' to playbook, allowing you to specify how many hosts can be processing a playbook at one time (default 0=all)
 * adds 'local_action: <action parameters>' as an alias to 'delegate_to: 127.0.0.1'
 
-0.6 "Cabo" -- August 6, 2012
+## 0.6 "Cabo" -- August 6, 2012
 
 playbooks:
 
@@ -899,7 +1060,7 @@ internals:
 * ./hacking/test-module now supports options like ansible takes and has a debugger mode
 * sudoing to a user other than root now works more seamlessly (uses /tmp, avoids umask issues)
 
-0.5 "Amsterdam" ------- July 04, 2012
+## 0.5 "Amsterdam" ------- July 04, 2012
 
 * Service module gets more accurate service states when running with upstart
 * Jinja2 usage in playbooks (not templates), reinstated, supports %include directive
@@ -927,7 +1088,7 @@ internals:
 * basic setup module support for Solaris
 * ./library relative to the playbook is always in path so modules can be included in tarballs with playbooks
 
-0.4 "Unchained" ------- May 23, 2012
+## 0.4 "Unchained" ------- May 23, 2012
 
 Internals/Core
 * internal inventory API now more object oriented, parsers decoupled
@@ -982,7 +1143,7 @@ Misc Bugfixes
 * fix to internals of hacking/test-module development script
 
 
-0.3 "Baluchitherium" -- April 23, 2012
+## 0.3 "Baluchitherium" -- April 23, 2012
 
 * Packaging for Debian, Gentoo, and Arch
 * Improvements to the apt and yum modules
@@ -1012,7 +1173,7 @@ in kickstarts
 * fetch module for pulling in files from remote hosts
 * command task supports creates=foo for idempotent semantics, won't run if file foo already exists
 
-0.0.2 and 0.0.1
+## 0.0.2 and 0.0.1
 
 * Initial stages of project
 

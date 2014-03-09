@@ -214,7 +214,7 @@ def main():
             m = int(minutes)
             if not isinstance(m, types.IntType):
                 module.fail_json(msg='minutes must be a number')
-        except:
+        except Exception:
             module.fail_json(msg='invalid entry for minutes')
 
     ##################################################################
@@ -875,6 +875,6 @@ class Nagios(object):
                               changed=True)
 
 ######################################################################
-# this is magic, see lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
+# import module snippets
+from ansible.module_utils.basic import *
 main()

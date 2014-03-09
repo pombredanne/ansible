@@ -35,8 +35,9 @@ options:
 
     state:
         description:
-            - state of the package (installed or absent).
+            - desired state of the package.
         required: false
+        choices: [ "installed", "absent" ] 
 
     update_cache:
         description:
@@ -212,7 +213,7 @@ def main():
     elif p["state"] == "absent":
         remove_packages(module, pkgs)
 
-# this is magic, see lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
+# import module snippets
+from ansible.module_utils.basic import *
     
 main()        

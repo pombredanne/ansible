@@ -18,15 +18,17 @@
 import ansible
 
 from ansible import utils
+from ansible.utils import template
 from ansible.runner.return_data import ReturnData
 
 class ActionModule(object):
     ''' Print statements during execution '''
 
-    NEEDS_TMPPATH = False
+    TRANSFERS_FILES = False
 
     def __init__(self, runner):
         self.runner = runner
+        self.basedir = runner.basedir
 
     def run(self, conn, tmp, module_name, module_args, inject, complex_args=None, **kwargs):
         args = {}
@@ -49,10 +51,8 @@ class ActionModule(object):
             else:
                 result = dict(msg=args['msg'])
         elif 'var' in args:
-            (intermediate, exception) = utils.safe_eval(args['var'], inject, include_exceptions=True, template_call=True)
-            if exception is not None:
-                intermediate = "failed to evaluate: %s" % str(exception)
-            result[args['var']] = intermediate
+            results = template.template(self.basedir, "{{ %s }}" % args['var'], inject)
+            result[args['var']] = results
 
         # force flag to make debug output module always verbose
         result['verbose_always'] = True

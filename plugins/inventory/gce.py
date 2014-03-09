@@ -73,7 +73,7 @@ Version: 0.0.1
 '''
 
 USER_AGENT_PRODUCT="Ansible-gce_inventory_plugin"
-USER_AGENT_VERSION="v1beta15"
+USER_AGENT_VERSION="v1"
 
 import sys
 import os
@@ -114,8 +114,12 @@ class GceInventory(object):
     def get_gce_driver(self):
         '''Determine GCE authorization settings and return libcloud driver.'''
 
+        gce_ini_default_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)), "gce.ini")
+        gce_ini_path = os.environ.get('GCE_INI_PATH', gce_ini_default_path)
+
         config = ConfigParser.SafeConfigParser()
-        config.read(os.path.dirname(os.path.realpath(__file__)) + '/gce.ini')
+        config.read(gce_ini_path)
 
         # the GCE params in 'secrets.py' will override these
         secrets_path = config.get('gce', 'libcloud_secrets')
@@ -170,6 +174,10 @@ class GceInventory(object):
 
     def node_to_dict(self, inst):
         md = {}
+
+        if inst is None:
+            return {}
+
         if inst.extra['metadata'].has_key('items'):
             for entry in inst.extra['metadata']['items']:
                 md[entry['key']] = entry['value']
@@ -180,20 +188,25 @@ class GceInventory(object):
             'gce_id': inst.id,
             'gce_image': inst.image,
             'gce_machine_type': inst.size,
-            'gce_private_ip': inst.private_ip[0],
-            'gce_public_ip': inst.public_ip[0],
+            'gce_private_ip': inst.private_ips[0],
+            'gce_public_ip': inst.public_ips[0],
             'gce_name': inst.name,
             'gce_description': inst.extra['description'],
             'gce_status': inst.extra['status'],
             'gce_zone': inst.extra['zone'].name,
             'gce_tags': inst.extra['tags'],
             'gce_metadata': md,
-            'gce_network': net
+            'gce_network': net,
+            # Hosts don't have a public name, so we add an IP
+            'ansible_ssh_host': inst.public_ips[0]
         }
 
     def get_instance(self, instance_name):
         '''Gets details about a specific instance '''
-        return self.driver.ex_get_node(instance_name)
+        try:
+            return self.driver.ex_get_node(instance_name)
+        except Exception, e:
+            return None
 
     def group_instances(self):
         '''Group all instances'''

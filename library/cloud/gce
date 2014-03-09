@@ -19,6 +19,7 @@
 DOCUMENTATION = '''
 ---
 module: gce
+version_added: "1.4"
 short_description: create or terminate GCE instances
 description:
      - Creates or terminates Google Compute Engine (GCE) instances.  See
@@ -47,6 +48,27 @@ options:
   metadata:
     description:
       - a hash/dictionary of custom data for the instance; '{"key":"value",...}'
+    required: false
+    default: null
+    aliases: []
+  service_account_email:
+    version_added: 1.5.1
+    description:
+      - service account email
+    required: false
+    default: null
+    aliases: []
+  pem_file:
+    version_added: 1.5.1
+    description:
+      - path to the pem file associated with the service account email
+    required: false
+    default: null
+    aliases: []
+  project_id:
+    version_added: 1.5.1
+    description:
+      - your GCE project ID
     required: false
     default: null
     aliases: []
@@ -89,6 +111,8 @@ options:
     aliases: []
 
 requirements: [ "libcloud" ]
+notes:
+  - Either I(name) or I(instance_names) is required.
 author: Eric Johnson <erjohnso@google.com>
 '''
 
@@ -118,15 +142,19 @@ EXAMPLES = '''
     machine_type: n1-standard-1
     image: debian-6
     zone: us-central1-a
+    service_account_email: unique-email@developer.gserviceaccount.com
+    pem_file: /path/to/pem_file
+    project_id: project-id
   tasks:
     - name: Launch instances
-      local_action: gce instance_names=${names} machine_type=${machine_type}
-                    image=${image} zone=${zone}
+      local_action: gce instance_names={{names}} machine_type={{machine_type}}
+                    image={{image}} zone={{zone}} service_account_email={{ service_account_email }}
+                    pem_file={{ pem_file }} project_id={{ project_id }}
       register: gce
     - name: Wait for SSH to come up
-      local_action: wait_for host=${item.public_ip} port=22 delay=10
+      local_action: wait_for host={{item.public_ip}} port=22 delay=10
                     timeout=60 state=started
-      with_items: ${gce.instance_data}
+      with_items: {{gce.instance_data}}
 
 - name: Configure instance(s)
   hosts: launched
@@ -143,14 +171,11 @@ EXAMPLES = '''
       local_action:
         module: gce
         state: 'absent'
-        instance_names: ${gce.instance_names}
+        instance_names: {{gce.instance_names}}
 
 '''
 
 import sys
-
-USER_AGENT_PRODUCT="Ansible-gce"
-USER_AGENT_VERSION="v1beta15"
 
 try:
     from libcloud.compute.types import Provider
@@ -170,25 +195,6 @@ except ImportError:
         "msg='GCE module requires python's 'ast' module, python v2.6+'")
     sys.exit(1)
 
-# Load in the libcloud secrets file
-try:
-    import secrets
-except ImportError:
-    secrets = None
-ARGS = getattr(secrets, 'GCE_PARAMS', ())
-KWARGS = getattr(secrets, 'GCE_KEYWORD_PARAMS', {})
-
-if not ARGS or not 'project' in KWARGS:
-    print("failed=True " + \
-        "msg='Missing GCE connection parametres in libcloud secrets file.'")
-    sys.exit(1)
-
-def unexpected_error_msg(error):
-    """Create an error string based on passed in error."""
-    msg='Unexpected response: HTTP return_code['
-    msg+='%s], API error code[%s] and message: %s' % (
-        error.http_code, error.code, str(error.value))
-    return msg
 
 def get_instance_info(inst):
     """Retrieves instance information from an instance object and returns it
@@ -210,8 +216,8 @@ def get_instance_info(inst):
         'metadata': metadata,
         'name': inst.name,
         'network': netname,
-        'private_ip': inst.private_ip[0],
-        'public_ip': inst.public_ip[0],
+        'private_ip': inst.private_ips[0],
+        'public_ip': inst.public_ips[0],
         'status': ('status' in inst.extra) and inst.extra['status'] or None,
         'tags': ('tags' in inst.extra) and inst.extra['tags'] or [],
         'zone': ('zone' in inst.extra) and inst.extra['zone'].name or None,
@@ -258,10 +264,10 @@ def create_instances(module, gce, instance_names):
             md = literal_eval(metadata)
             if not isinstance(md, dict):
                 raise ValueError('metadata must be a dict')
-        except ValueError as e:
+        except ValueError, e:
             print("failed=True msg='bad metadata: %s'" % str(e))
             sys.exit(1)
-        except SyntaxError as e:
+        except SyntaxError, e:
             print("failed=True msg='bad metadata syntax'")
             sys.exit(1)
 
@@ -290,7 +296,7 @@ def create_instances(module, gce, instance_names):
             changed = True
         except ResourceExistsError:
             inst = gce.ex_get_node(name, lc_zone)
-        except GoogleBaseError as e:
+        except GoogleBaseError, e:
             module.fail_json(msg='Unexpected error attempting to create ' + \
                     'instance %s, error: %s' % (name, e.value))
 
@@ -326,7 +332,7 @@ def terminate_instances(module, gce, instance_names, zone_name):
             inst = gce.ex_get_node(name, zone_name)
         except ResourceNotFoundError:
             pass
-        except Exception as e:
+        except Exception, e:
             module.fail_json(msg=unexpected_error_msg(e), changed=False)
         if inst:
             gce.destroy_node(inst)
@@ -343,7 +349,7 @@ def main():
             instance_names = dict(),
             machine_type = dict(default='n1-standard-1'),
             metadata = dict(),
-            name = dict(default='gce'),
+            name = dict(),
             network = dict(default='default'),
             persistent_boot_disk = dict(type='bool', choices=BOOLEANS, default=False),
             state = dict(choices=['active', 'present', 'absent', 'deleted'],
@@ -352,8 +358,13 @@ def main():
             zone = dict(choices=['us-central1-a', 'us-central1-b',
                     'us-central2-a', 'europe-west1-a', 'europe-west1-b'],
                     default='us-central1-a'),
+            service_account_email = dict(),
+            pem_file = dict(),
+            project_id = dict(),
         )
     )
+
+    gce = gce_connect(module)
 
     image = module.params.get('image')
     instance_names = module.params.get('instance_names')
@@ -366,13 +377,6 @@ def main():
     tags = module.params.get('tags')
     zone = module.params.get('zone')
     changed = False
-
-    try:
-        gce = get_driver(Provider.GCE)(*ARGS, datacenter=zone, **KWARGS)
-        gce.connection.user_agent_append("%s/%s" % (
-            USER_AGENT_PRODUCT, USER_AGENT_VERSION))
-    except Exception as e:
-        module.fail_json(msg=unexpected_error_msg(e), changed=False)
 
     inames = []
     if isinstance(instance_names, list):
@@ -415,7 +419,8 @@ def main():
     print json.dumps(json_output)
     sys.exit(0)
 
-# this is magic, see lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
+# import module snippets
+from ansible.module_utils.basic import *
+from ansible.module_utils.gce import *
 
 main()

@@ -55,17 +55,14 @@ ifeq ($(OFFICIAL),)
 endif
 RPMNVR = "$(NAME)-$(VERSION)-$(RPMRELEASE)$(RPMDIST)"
 
-NOSETESTS := nosetests
+NOSETESTS ?= nosetests
 
 ########################################################
 
 all: clean python
 
 tests:
-	PYTHONPATH=./lib $(NOSETESTS) -d -v
-
-# To force a rebuild of the docs run 'touch VERSION && make docs'
-docs: $(MANPAGES) modulepages
+	PYTHONPATH=./lib ANSIBLE_LIBRARY=./library  $(NOSETESTS) -d -w test/units -v
 
 authors:
 	sh hacking/authors.sh
@@ -91,7 +88,7 @@ pep8:
 	-pep8 -r --ignore=E501,E221,W291,W391,E302,E251,E203,W293,E231,E303,E201,E225,E261,E241 --filename "*" library/
 
 pyflakes:
-	pyflakes lib/ansible/*.py bin/*
+	pyflakes lib/ansible/*.py lib/ansible/*/*.py bin/*
 
 clean:
 	@echo "Cleaning up distutils stuff"
@@ -127,7 +124,7 @@ install:
 sdist: clean docs
 	$(PYTHON) setup.py sdist -t MANIFEST.in
 
-rpmcommon: sdist
+rpmcommon: $(MANPAGES) sdist
 	@mkdir -p rpm-build
 	@cp dist/*.gz rpm-build/
 	@sed -e 's#^Version:.*#Version: $(VERSION)#' -e 's#^Release:.*#Release: $(RPMRELEASE)%{?dist}#' $(RPMSPEC) >rpm-build/$(NAME).spec
@@ -172,11 +169,6 @@ deb: debian
 
 # for arch or gentoo, read instructions in the appropriate 'packaging' subdirectory directory
 
-modulepages:
-	PYTHONPATH=./lib $(PYTHON) hacking/module_formatter.py -A $(VERSION) -t man -o docs/man/man3/ --module-dir=library --template-dir=hacking/templates # --verbose
-
-# because this requires Sphinx it is not run as part of every build, those building the RPM and so on can ignore this
-
-webdocs:
+webdocs: $(MANPAGES)
 	(cd docsite/; make docs)
 

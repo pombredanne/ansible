@@ -31,6 +31,7 @@ except ImportError:
 DOCUMENTATION = '''
 ---
 module: file
+version_added: "historical"
 short_description: Sets attributes of files
 description: 
      - Sets attributes of files, symlinks, and directories, or removes
@@ -39,7 +40,7 @@ description:
 options:
   path:
     description:
-      - 'defines the file being managed, unless when used with C(state=link), and then sets the destination to create a symbolic link to using I(src). Aliases: I(dest), I(name)'
+      - 'path to the file being managed.  Aliases: I(dest), I(name)'
     required: true
     default: []
     aliases: ['dest', 'name'] 
@@ -51,7 +52,7 @@ options:
         If C(link), the symbolic link will be created or changed. Use C(hard)
         for hardlinks. If C(absent), directories will be recursively deleted,
         and files or symlinks will be unlinked. If C(touch) (new in 1.4), an empty file will 
-        be created if the c(dest) does not exist, while an existing file or
+        be created if the c(path) does not exist, while an existing file or
         directory will receive updated file access and modification times (similar
         to the way `touch` works from the command line).
     required: false
@@ -80,7 +81,8 @@ options:
     default: null
     choices: []
     description:
-      - path of the file to link to (applies only to C(state=link)).
+      - path of the file to link to (applies only to C(state=link)). Will accept absolute,
+        relative and nonexisting paths. Relative paths are not expanded.
   seuser:
     required: false
     default: null
@@ -122,7 +124,7 @@ options:
     choices: [ "yes", "no" ]
     description:
       - 'force the creation of the symlinks in two cases: the source file does 
-        not exist (but will appear later); the destination exists and a file (so, we need to unlink the
+        not exist (but will appear later); the destination exists and is a file (so, we need to unlink the
         "path" file and create symlink to the "src" file in place of it).'
 notes:
     - See also M(copy), M(template), M(assemble)
@@ -142,8 +144,9 @@ def main():
 
     module = AnsibleModule(
         argument_spec = dict(
-            state = dict(choices=['file','directory','link','hard','touch','absent'], default='file'),
+            state = dict(choices=['file','directory','link','hard','touch','absent'], default=None),
             path  = dict(aliases=['dest', 'name'], required=True),
+            original_basename = dict(required=False), # Internal use only, for recursive ops
             recurse  = dict(default='no', type='bool'),
             force = dict(required=False,default=False,type='bool'),
             diff_peek = dict(default=None),
@@ -171,25 +174,6 @@ def main():
             pass
         module.exit_json(path=path, changed=False, appears_binary=appears_binary)
 
-    # source is both the source of a symlink or an informational passing of the src for a template module
-    # or copy module, even if this module never uses it, it is needed to key off some things
-
-    src = params.get('src', None)
-    if src:
-        src = os.path.expanduser(src)
-
-    if src is not None and os.path.isdir(path) and state not in ["link", "absent"]:
-        params['path'] = path = os.path.join(path, os.path.basename(src))
-
-    file_args = module.load_file_common_arguments(params)
-
-    if state in ['link','hard'] and (src is None or path is None):
-        module.fail_json(msg='src and dest are required for creating links')
-    elif path is None:
-        module.fail_json(msg='path is required')
-
-    changed = False
-
     prev_state = 'absent'
 
     if os.path.lexists(path):
@@ -202,6 +186,36 @@ def main():
         else:
             # could be many other things, but defaulting to file
             prev_state = 'file'
+
+    if prev_state is not None and state is None:
+        # set state to current type of file
+        state = prev_state
+    elif state is None:
+        # set default state to file
+        state = 'file'
+
+    # source is both the source of a symlink or an informational passing of the src for a template module
+    # or copy module, even if this module never uses it, it is needed to key off some things
+
+    src = params.get('src', None)
+    if src:
+        src = os.path.expanduser(src)
+
+    if src is not None and os.path.isdir(path) and state not in ["link", "absent"]:
+        if params['original_basename']:
+            basename = params['original_basename']
+        else:
+            basename = os.path.basename(src)
+        params['path'] = path = os.path.join(path, basename)
+
+    file_args = module.load_file_common_arguments(params)
+
+    if state in ['link','hard'] and (src is None or path is None):
+        module.fail_json(msg='src and dest are required for creating links')
+    elif path is None:
+        module.fail_json(msg='path is required')
+
+    changed = False
 
     recurse = params['recurse']
 
@@ -220,8 +234,8 @@ def main():
                         if module.check_mode:
                             module.exit_json(changed=True)
                         shutil.rmtree(path, ignore_errors=False)
-                    except:
-                        module.exit_json(msg="rmtree failed")
+                    except Exception, e:
+                        module.fail_json(msg="rmtree failed: %s" % str(e))
             else:
                 if module.check_mode:
                     module.exit_json(changed=True)
@@ -231,7 +245,7 @@ def main():
         module.exit_json(path=path, changed=True)
 
     if prev_state != 'absent' and prev_state != state:
-        if not (force and (prev_state == 'file' or prev_state == 'directory') and state == 'link') and state != 'touch':
+        if not (force and (prev_state == 'file' or prev_state == 'hard' or prev_state == 'directory') and state == 'link') and state != 'touch':
             module.fail_json(path=path, msg='refusing to convert between %s and %s for %s' % (prev_state, state, src))
 
     if prev_state == 'absent' and state == 'absent':
@@ -269,20 +283,19 @@ def main():
 
     elif state in ['link','hard']:
 
-        if os.path.isabs(src):
-            abs_src = src
-        else:
-            module.fail_json(msg="absolute paths are required")
+        if state == 'hard':
+            if os.path.isabs(src):
+                abs_src = src
+            else:
+                module.fail_json(msg="absolute paths are required")
 
-        if not os.path.exists(abs_src) and not force:
-            module.fail_json(path=path, src=src, msg='src file does not exist')
+            if not os.path.exists(abs_src) and not force:
+                module.fail_json(path=path, src=src, msg='src file does not exist')
 
         if prev_state == 'absent':
             changed = True
         elif prev_state == 'link':
             old_src = os.readlink(path)
-            if not os.path.isabs(old_src):
-                old_src = os.path.join(os.path.dirname(path), old_src)
             if old_src != src:
                 changed = True
         elif prev_state == 'hard':
@@ -293,6 +306,10 @@ def main():
         elif prev_state == 'file':
             if not force:
                 module.fail_json(dest=path, src=src, msg='Cannot link, file exists at destination')
+            changed = True
+        elif prev_state == 'directory':
+            if not force:
+                module.fail_json(dest=path, src=src, msg='Cannot link, directory exists at destination')
             changed = True
         else:
             module.fail_json(dest=path, src=src, msg='unexpected position reached')
@@ -336,7 +353,7 @@ def main():
     else:
         module.fail_json(path=path, msg='unexpected position reached')
 
-# this is magic, see lib/ansible/module_common.py
-#<<INCLUDE_ANSIBLE_MODULE_COMMON>>
+# import module snippets
+from ansible.module_utils.basic import *
 main()
 

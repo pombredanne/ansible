@@ -1,12 +1,11 @@
 Error Handling In Playbooks
 ===========================
 
-.. contents::
-   :depth: 2
+.. contents:: Topics
 
 Ansible normally has defaults that make sure to check the return codes of commands and modules and
 it fails fast -- forcing an error to be dealt with unless you decide otherwise.
-y
+
 Sometimes a command that returns 0 isn't an error.  Sometimes a command might not always
 need to report that it 'changed' the remote system.  This section describes how to change
 the default behavior of Ansible for certain tasks so output and error handling behavior is
@@ -26,6 +25,9 @@ write a task that looks like this::
     - name: this will not be counted as a failure
       command: /bin/false
       ignore_errors: yes
+
+Note that the above system only governs the failure of the particular task, so if you have an undefined
+variable used, it will still raise an error that users will need to address.
 
 .. _controlling_what_defines_failure:
 

@@ -1,13 +1,12 @@
 Loops
 =====
 
-.. contents::
-   :depth: 2
-
 Often you'll want to do many things in one task, such as create a lot of users, install a lot of packages, or
 repeat a polling step until a certain result is reached.
 
 This chapter is all about how to use loops in playbooks.
+
+.. contents:: Topics
 
 .. _standard_loops:
 
@@ -64,6 +63,31 @@ As with the case of 'with_items' above, you can use previously defined variables
       with_nested:
         - users
         - [ 'clientdb', 'employeedb', 'providerdb' ]
+
+.. _looping_over_hashes:
+
+Looping over Hashes
+```````````````````
+
+.. versionadded:: 1.5
+
+Suppose you have the following variable::
+
+    ---
+    users:
+      alice:
+        name: Alice Appleworth
+        telephone: 123-456-7890
+      bob:
+        name: Bob Bananarama
+        telephone: 987-654-3210
+
+And you want to print every user's name and phone number.  You can loop through the elements of a hash using ``with_dict`` like this::
+
+    tasks:
+      - name: Print phone records
+        debug: msg="User {{ item.key }} is {{ item.value.name }} ({{ item.value.telephone }})"
+        with_dict: users
 
 .. _looping_over_fileglobs:
 
@@ -128,7 +152,7 @@ It might happen like so::
     - user: name={{ item.name }} state=present generate_ssh_key=yes
       with_items: users
 
-    - authorized_key: user={{ item.0.name }} key={{ lookup('file', item.1) }}
+    - authorized_key: "user={{ item.0.name }} key='{{ lookup('file', item.1) }}'"
       with_subelements:
          - users
          - authorized
@@ -316,12 +340,74 @@ As you can see the formatting of packages in these lists is all over the place. 
 
 That's how!
 
+.. _using_register_with_a_loop:
+
+Using register with a loop
+``````````````````````````
+
+When using ``register`` with a loop the data structure placed in the variable during a loop, will contain a ``results`` attribute, that is a list of all responses from the module.
+
+Here is an example of using ``register`` with ``with_items``::
+
+    - shell: echo "{{ item }}"
+      with_items:
+        - one
+        - two
+      register: echo
+
+This differs from the data structure returned when using ``register`` without a loop::
+
+    {
+        "changed": true,
+        "msg": "All items completed",
+        "results": [
+            {
+                "changed": true,
+                "cmd": "echo \"one\" ",
+                "delta": "0:00:00.003110",
+                "end": "2013-12-19 12:00:05.187153",
+                "invocation": {
+                    "module_args": "echo \"one\"",
+                    "module_name": "shell"
+                },
+                "item": "one",
+                "rc": 0,
+                "start": "2013-12-19 12:00:05.184043",
+                "stderr": "",
+                "stdout": "one"
+            },
+            {
+                "changed": true,
+                "cmd": "echo \"two\" ",
+                "delta": "0:00:00.002920",
+                "end": "2013-12-19 12:00:05.245502",
+                "invocation": {
+                    "module_args": "echo \"two\"",
+                    "module_name": "shell"
+                },
+                "item": "two",
+                "rc": 0,
+                "start": "2013-12-19 12:00:05.242582",
+                "stderr": "",
+                "stdout": "two"
+            }
+        ]
+    }
+
+Subsequent loops over the registered variable to inspect the results may look like::
+
+    - name: Fail if return code is not 0
+      fail:
+        msg: "The command ({{ item.cmd }}) did not have a 0 return code"
+      when: item.rc != 0
+      with_items: echo.results
+
 .. _writing_your_own_iterators:
 
 Writing Your Own Iterators
 ``````````````````````````
 
-While you ordinarily shouldn't have to, should you wish to write your own ways to loop over arbitrary datastructures, you can read `developing_plugins` for some starter
+While you ordinarily shouldn't have to, should you wish to write your own ways to loop over arbitrary datastructures, you can read :doc:`developing_plugins` for some starter
 information.  Each of the above features are implemented as plugins in ansible, so there are many implementations to reference.
 
 .. seealso::
