@@ -1,4 +1,4 @@
-# (c) 2012, Michael DeHaan <michael.dehaan@gmail.com>
+# (c) 2012-2014, Michael DeHaan <michael.dehaan@gmail.com>
 #
 # This file is part of Ansible
 #
@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
+import errno
 import sys
 import re
 import os
@@ -25,10 +26,12 @@ import optparse
 import operator
 from ansible import errors
 from ansible import __version__
-from ansible.utils.plugins import *
 from ansible.utils import template
+from ansible.utils.display_functions import *
+from ansible.utils.plugins import *
 from ansible.callbacks import display
 import ansible.constants as C
+import ast
 import time
 import StringIO
 import stat
@@ -41,17 +44,11 @@ import warnings
 import traceback
 import getpass
 import sys
-import textwrap
 import json
 
-#import vault
 from vault import VaultLib
 
 VERBOSITY=0
-
-# list of all deprecation messages to prevent duplicate display
-deprecations = {}
-warns = {}
 
 MAX_FILE_SIZE_FOR_DIFF=1*1024*1024
 
@@ -72,11 +69,35 @@ try:
 except:
     pass
 
+try:
+    import builtin
+except ImportError:
+    import __builtin__ as builtin
+
 KEYCZAR_AVAILABLE=False
 try:
-    import keyczar.errors as key_errors
-    from keyczar.keys import AesKey
-    KEYCZAR_AVAILABLE=True
+    try:
+        # some versions of pycrypto may not have this?
+        from Crypto.pct_warnings import PowmInsecureWarning
+    except ImportError:
+        PowmInsecureWarning = RuntimeWarning
+
+    with warnings.catch_warnings(record=True) as warning_handler:
+        warnings.simplefilter("error", PowmInsecureWarning)
+        try:
+            import keyczar.errors as key_errors
+            from keyczar.keys import AesKey
+        except PowmInsecureWarning:
+            system_warning(
+                "The version of gmp you have installed has a known issue regarding " + \
+                "timing vulnerabilities when used with pycrypto. " + \
+                "If possible, you should update it (ie. yum update gmp)."
+            )
+            warnings.resetwarnings()
+            warnings.simplefilter("ignore")
+            import keyczar.errors as key_errors
+            from keyczar.keys import AesKey
+        KEYCZAR_AVAILABLE=True
 except ImportError:
     pass
 
@@ -99,7 +120,7 @@ def key_for_hostname(hostname):
         raise errors.AnsibleError('ACCELERATE_KEYS_DIR is not a directory.')
 
     if stat.S_IMODE(os.stat(key_path).st_mode) != int(C.ACCELERATE_KEYS_DIR_PERMS, 8):
-        raise errors.AnsibleError('Incorrect permissions on ACCELERATE_KEYS_DIR (%s)' % (C.ACCELERATE_KEYS_DIR,))
+        raise errors.AnsibleError('Incorrect permissions on the private key directory. Use `chmod 0%o %s` to correct this issue, and make sure any of the keys files contained within that directory are set to 0%o' % (int(C.ACCELERATE_KEYS_DIR_PERMS, 8), C.ACCELERATE_KEYS_DIR, int(C.ACCELERATE_KEYS_FILE_PERMS, 8)))
 
     key_path = os.path.join(key_path, hostname)
 
@@ -113,7 +134,7 @@ def key_for_hostname(hostname):
         return key
     else:
         if stat.S_IMODE(os.stat(key_path).st_mode) != int(C.ACCELERATE_KEYS_FILE_PERMS, 8):
-            raise errors.AnsibleError('Incorrect permissions on ACCELERATE_KEYS_FILE (%s)' % (key_path,))
+            raise errors.AnsibleError('Incorrect permissions on the key file for this host. Use `chmod 0%o %s` to correct this issue.' % (int(C.ACCELERATE_KEYS_FILE_PERMS, 8), key_path))
         fh = open(key_path)
         key = AesKey.Read(fh.read())
         fh.close()
@@ -193,7 +214,7 @@ def check_conditional(conditional, basedir, inject, fail_on_undefined=False):
 
     conditional = conditional.replace("jinja2_compare ","")
     # allow variable names
-    if conditional in inject and str(inject[conditional]).find('-') == -1:
+    if conditional in inject and '-' not in str(inject[conditional]):
         conditional = inject[conditional]
     conditional = template.template(basedir, conditional, inject, fail_on_undefined=fail_on_undefined)
     original = str(conditional).replace("jinja2_compare ","")
@@ -206,9 +227,9 @@ def check_conditional(conditional, basedir, inject, fail_on_undefined=False):
         # variable was undefined. If we happened to be 
         # looking for an undefined variable, return True,
         # otherwise fail
-        if conditional.find("is undefined") != -1:
+        if "is undefined" in conditional:
             return True
-        elif conditional.find("is defined") != -1:
+        elif "is defined" in conditional:
             return False
         else:
             raise errors.AnsibleError("error while evaluating conditional: %s" % original)
@@ -293,7 +314,38 @@ def json_loads(data):
 
     return json.loads(data)
 
-def parse_json(raw_data):
+def _clean_data(orig_data):
+    ''' remove template tags from a string '''
+    data = orig_data
+    if isinstance(orig_data, basestring):
+        for pattern,replacement in (('{{','{#'), ('}}','#}'), ('{%','{#'), ('%}','#}')):
+            data = data.replace(pattern, replacement)
+    return data
+
+def _clean_data_struct(orig_data):
+    '''
+    walk a complex data structure, and use _clean_data() to
+    remove any template tags that may exist
+    '''
+    if isinstance(orig_data, dict):
+        data = orig_data.copy()
+        for key in data:
+            new_key = _clean_data_struct(key)
+            new_val = _clean_data_struct(data[key])
+            if key != new_key:
+                del data[key]
+            data[new_key] = new_val
+    elif isinstance(orig_data, list):
+        data = orig_data[:]
+        for i in range(0, len(data)):
+            data[i] = _clean_data_struct(data[i])
+    elif isinstance(orig_data, basestring):
+        data = _clean_data(orig_data)
+    else:
+        data = orig_data
+    return data
+
+def parse_json(raw_data, from_remote=False):
     ''' this version for module return data only '''
 
     orig_data = raw_data
@@ -302,7 +354,7 @@ def parse_json(raw_data):
     data = filter_leading_non_json_lines(raw_data)
 
     try:
-        return json.loads(data)
+        results = json.loads(data)
     except:
         # not JSON, but try "Baby JSON" which allows many of our modules to not
         # require JSON and makes writing modules in bash much simpler
@@ -312,9 +364,8 @@ def parse_json(raw_data):
         except:
             print "failed to parse json: "+ data
             raise
-
         for t in tokens:
-            if t.find("=") == -1:
+            if "=" not in t:
                 raise errors.AnsibleError("failed to parse: %s" % orig_data)
             (key,value) = t.split("=", 1)
             if key == 'changed' or 'failed':
@@ -327,13 +378,17 @@ def parse_json(raw_data):
             results[key] = value
         if len(results.keys()) == 0:
             return { "failed" : True, "parsed" : False, "msg" : orig_data }
-        return results
+
+    if from_remote:
+        results = _clean_data_struct(results)
+
+    return results
 
 def smush_braces(data):
     ''' smush Jinaj2 braces so unresolved templates like {{ foo }} don't get parsed weird by key=value code '''
-    while data.find('{{ ') != -1:
+    while '{{ ' in data:
         data = data.replace('{{ ', '{{')
-    while data.find(' }}') != -1:
+    while ' }}' in data:
         data = data.replace(' }}', '}}')
     return data
 
@@ -354,9 +409,9 @@ def smush_ds(data):
 def parse_yaml(data, path_hint=None):
     ''' convert a yaml string to a data structure.  Also supports JSON, ssssssh!!!'''
 
-    data = data.lstrip()
+    stripped_data = data.lstrip()
     loaded = None
-    if data.startswith("{") or data.startswith("["):
+    if stripped_data.startswith("{") or stripped_data.startswith("["):
         # since the line starts with { or [ we can infer this is a JSON document.
         try:
             loaded = json.loads(data)
@@ -374,7 +429,7 @@ def parse_yaml(data, path_hint=None):
 def process_common_errors(msg, probline, column):
     replaced = probline.replace(" ","")
 
-    if replaced.find(":{{") != -1 and replaced.find("}}") != -1:
+    if ":{{" in replaced and "}}" in replaced:
         msg = msg + """
 This one looks easy to fix.  YAML thought it was looking for the start of a 
 hash/dictionary and was confused to see a second "{".  Most likely this was
@@ -424,7 +479,7 @@ Or:
                 match = True
             elif middle.startswith('"') and not middle.endswith('"'):
                 match = True
-            if len(middle) > 0 and middle[0] in [ '"', "'" ] and middle[-1] in [ '"', "'" ] and probline.count("'") > 2 or probline.count("'") > 2:
+            if len(middle) > 0 and middle[0] in [ '"', "'" ] and middle[-1] in [ '"', "'" ] and probline.count("'") > 2 or probline.count('"') > 2:
                 unbalanced = True
             if match:
                 msg = msg + """
@@ -463,32 +518,32 @@ Could be written as:
 
     return msg
 
-def process_yaml_error(exc, data, path=None):
+def process_yaml_error(exc, data, path=None, show_content=True):
     if hasattr(exc, 'problem_mark'):
         mark = exc.problem_mark
-        if mark.line -1 >= 0:
-            before_probline = data.split("\n")[mark.line-1]
-        else:
-            before_probline = ''
-        probline = data.split("\n")[mark.line]
-        arrow = " " * mark.column + "^"
-        msg = """Syntax Error while loading YAML script, %s
+        if show_content:
+            if mark.line -1 >= 0:
+                before_probline = data.split("\n")[mark.line-1]
+            else:
+                before_probline = ''
+            probline = data.split("\n")[mark.line]
+            arrow = " " * mark.column + "^"
+            msg = """Syntax Error while loading YAML script, %s
 Note: The error may actually appear before this position: line %s, column %s
 
 %s
 %s
 %s""" % (path, mark.line + 1, mark.column + 1, before_probline, probline, arrow)
 
-        unquoted_var = None
-        if '{{' in probline and '}}' in probline:
-            if '"{{' not in probline or "'{{" not in probline:
-                unquoted_var = True
+            unquoted_var = None
+            if '{{' in probline and '}}' in probline:
+                if '"{{' not in probline or "'{{" not in probline:
+                    unquoted_var = True
 
-        msg = process_common_errors(msg, probline, mark.column)
-        if not unquoted_var:
-            msg = process_common_errors(msg, probline, mark.column)
-        else:
-            msg = msg + """
+            if not unquoted_var:
+                msg = process_common_errors(msg, probline, mark.column)
+            else:
+                msg = msg + """
 We could be wrong, but this one looks like it might be an issue with
 missing quotes.  Always quote template expression brackets when they 
 start a value. For instance:            
@@ -502,7 +557,14 @@ Should be written as:
       - "{{ foo }}"      
 
 """
-            msg = process_common_errors(msg, probline, mark.column)
+        else:
+            # most likely displaying a file with sensitive content,
+            # so don't show any of the actual lines of yaml just the
+            # line number itself
+            msg = """Syntax error while loading YAML script, %s
+The error appears to have been on line %s, column %s, but may actually
+be before there depending on the exact syntax problem.
+""" % (path, mark.line + 1, mark.column + 1)
 
     else:
         # No problem markers means we have to throw a generic
@@ -518,6 +580,7 @@ def parse_yaml_from_file(path, vault_password=None):
     ''' convert a yaml file to a data structure '''
 
     data = None
+    show_content = True
 
     try:
         data = open(path).read()
@@ -527,11 +590,12 @@ def parse_yaml_from_file(path, vault_password=None):
     vault = VaultLib(password=vault_password)
     if vault.is_encrypted(data):
         data = vault.decrypt(data)
+        show_content = False
 
     try:
         return parse_yaml(data, path_hint=path)
     except yaml.YAMLError, exc:
-        process_yaml_error(exc, data, path)
+        process_yaml_error(exc, data, path, show_content)
 
 def parse_kv(args):
     ''' convert a string of key/value items to a dict '''
@@ -539,10 +603,16 @@ def parse_kv(args):
     if args is not None:
         # attempting to split a unicode here does bad things
         args = args.encode('utf-8')
-        vargs = [x.decode('utf-8') for x in shlex.split(args, posix=True)]
-        #vargs = shlex.split(str(args), posix=True)
+        try:
+            vargs = shlex.split(args, posix=True)
+        except ValueError, ve:
+            if 'no closing quotation' in str(ve).lower():
+                raise errors.AnsibleError("error parsing argument string, try quoting the entire line.")
+            else:
+                raise
+        vargs = [x.decode('utf-8') for x in vargs]
         for x in vargs:
-            if x.find("=") != -1:
+            if "=" in x:
                 k, v = x.split("=",1)
                 options[k]=v
     return options
@@ -551,18 +621,19 @@ def merge_hash(a, b):
     ''' recursively merges hash b into a
     keys from b take precedence over keys from a '''
 
-    result = copy.deepcopy(a)
+    result = {}
 
-    # next, iterate over b keys and values
-    for k, v in b.iteritems():
-        # if there's already such key in a
-        # and that key contains dict
-        if k in result and isinstance(result[k], dict):
-            # merge those dicts recursively
-            result[k] = merge_hash(a[k], v)
-        else:
-            # otherwise, just copy a value from b to a
-            result[k] = v
+    for dicts in a, b:
+        # next, iterate over b keys and values
+        for k, v in dicts.iteritems():
+            # if there's already such key in a
+            # and that key contains dict
+            if k in result and isinstance(result[k], dict):
+                # merge those dicts recursively
+                result[k] = merge_hash(a[k], v)
+            else:
+                # otherwise, just copy a value from b to a
+                result[k] = v
 
     return result
 
@@ -577,18 +648,21 @@ def md5s(data):
     return digest.hexdigest()
 
 def md5(filename):
-    ''' Return MD5 hex digest of local file, or None if file is not present. '''
+    ''' Return MD5 hex digest of local file, None if file is not present or a directory. '''
 
-    if not os.path.exists(filename):
+    if not os.path.exists(filename) or os.path.isdir(filename):
         return None
     digest = _md5()
     blocksize = 64 * 1024
-    infile = open(filename, 'rb')
-    block = infile.read(blocksize)
-    while block:
-        digest.update(block)
+    try:
+        infile = open(filename, 'rb')
         block = infile.read(blocksize)
-    infile.close()
+        while block:
+            digest.update(block)
+            block = infile.read(blocksize)
+        infile.close()
+    except IOError, e:
+        raise errors.AnsibleError("error while accessing the file %s, error was: %s" % (filename, e))
     return digest.hexdigest()
 
 def default(value, function):
@@ -804,6 +878,12 @@ def ask_vault_passwords(ask_vault_pass=False, ask_new_vault_pass=False, confirm_
         if new_vault_pass != new_vault_pass2:
             raise errors.AnsibleError("Passwords do not match")
 
+    # enforce no newline chars at the end of passwords
+    if vault_pass:
+        vault_pass = vault_pass.strip()
+    if new_vault_pass:
+        new_vault_pass = new_vault_pass.strip()
+
     return vault_pass, new_vault_pass
 
 def ask_passwords(ask_pass=False, ask_sudo_pass=False, ask_su_pass=False, ask_vault_pass=False):
@@ -868,10 +948,11 @@ def filter_leading_non_json_lines(buf):
     filter only leading lines since multiline JSON is valid.
     '''
 
+    kv_regex = re.compile(r'.*\w+=\w+.*')
     filtered_lines = StringIO.StringIO()
     stop_filtering = False
     for line in buf.splitlines():
-        if stop_filtering or "=" in line or line.startswith('{') or line.startswith('['):
+        if stop_filtering or kv_regex.match(line) or line.startswith('{') or line.startswith('['):
             stop_filtering = True
             filtered_lines.write(line + '\n')
     return filtered_lines.getvalue()
@@ -909,9 +990,9 @@ def make_su_cmd(su_user, executable, cmd):
     """
     # TODO: work on this function
     randbits = ''.join(chr(random.randint(ord('a'), ord('z'))) for x in xrange(32))
-    prompt = 'assword: '
+    prompt = '[Pp]assword: ?$'
     success_key = 'SUDO-SUCCESS-%s' % randbits
-    sudocmd = '%s %s %s %s -c %s' % (
+    sudocmd = '%s %s %s -c "%s -c %s"' % (
         C.DEFAULT_SU_EXE, C.DEFAULT_SU_FLAGS, su_user, executable or '$SHELL',
         pipes.quote('echo %s; %s' % (success_key, cmd))
     )
@@ -962,51 +1043,114 @@ def is_list_of_strings(items):
             return False
     return True
 
-def safe_eval(str, locals=None, include_exceptions=False):
+def list_union(a, b):
+    result = []
+    for x in a:
+        if x not in result:
+            result.append(x)
+    for x in b:
+        if x not in result:
+            result.append(x)
+    return result
+
+def list_intersection(a, b):
+    result = []
+    for x in a:
+        if x in b and x not in result:
+            result.append(x)
+    return result
+
+def safe_eval(expr, locals={}, include_exceptions=False):
     '''
     this is intended for allowing things like:
     with_items: a_list_variable
     where Jinja2 would return a string
     but we do not want to allow it to call functions (outside of Jinja2, where
     the env is constrained)
+
+    Based on:
+    http://stackoverflow.com/questions/12523516/using-ast-and-whitelists-to-make-pythons-eval-safe
     '''
-    # FIXME: is there a more native way to do this?
 
-    def is_set(var):
-        return not var.startswith("$") and not '{{' in var
+    # this is the whitelist of AST nodes we are going to 
+    # allow in the evaluation. Any node type other than 
+    # those listed here will raise an exception in our custom
+    # visitor class defined below.
+    SAFE_NODES = set(
+        (
+            ast.Add,
+            ast.BinOp,
+            ast.Call,
+            ast.Compare,
+            ast.Dict,
+            ast.Div,
+            ast.Expression,
+            ast.List,
+            ast.Load,
+            ast.Mult,
+            ast.Num,
+            ast.Name,
+            ast.Str,
+            ast.Sub,
+            ast.Tuple,
+            ast.UnaryOp,
+        )
+    )
 
-    def is_unset(var):
-        return var.startswith("$") or '{{' in var
+    # AST node types were expanded after 2.6
+    if not sys.version.startswith('2.6'):
+        SAFE_NODES.union(
+            set(
+                (ast.Set,)
+            )
+        )
 
-    # do not allow method calls to modules
-    if not isinstance(str, basestring):
+    filter_list = []
+    for filter in filter_loader.all():
+        filter_list.extend(filter.filters().keys())
+
+    CALL_WHITELIST = C.DEFAULT_CALLABLE_WHITELIST + filter_list
+
+    class CleansingNodeVisitor(ast.NodeVisitor):
+        def generic_visit(self, node, inside_call=False):
+            if type(node) not in SAFE_NODES:
+                raise Exception("invalid expression (%s)" % expr)
+            elif isinstance(node, ast.Call):
+                inside_call = True
+            elif isinstance(node, ast.Name) and inside_call:
+                if hasattr(builtin, node.id) and node.id not in CALL_WHITELIST:
+                    raise Exception("invalid function: %s" % node.id)
+            # iterate over all child nodes
+            for child_node in ast.iter_child_nodes(node):
+                self.generic_visit(child_node, inside_call)
+
+    if not isinstance(expr, basestring):
         # already templated to a datastructure, perhaps?
         if include_exceptions:
-            return (str, None)
-        return str
-    if re.search(r'\w\.\w+\(', str):
-        if include_exceptions:
-            return (str, None)
-        return str
-    # do not allow imports
-    if re.search(r'import \w+', str):
-        if include_exceptions:
-            return (str, None)
-        return str
+            return (expr, None)
+        return expr
+
+    cnv = CleansingNodeVisitor()
     try:
-        result = None
-        if not locals:
-            result = eval(str)
-        else:
-            result = eval(str, None, locals)
+        parsed_tree = ast.parse(expr, mode='eval')
+        cnv.visit(parsed_tree)
+        compiled = compile(parsed_tree, expr, 'eval')
+        result = eval(compiled, {}, locals)
+
         if include_exceptions:
             return (result, None)
         else:
             return result
+    except SyntaxError, e:
+        # special handling for syntax errors, we just return
+        # the expression string back as-is
+        if include_exceptions:
+            return (expr, None)
+        return expr
     except Exception, e:
         if include_exceptions:
-            return (str, e)
-        return str
+            return (expr, e)
+        return expr
 
 
 def listify_lookup_plugin_terms(terms, basedir, inject):
@@ -1018,12 +1162,12 @@ def listify_lookup_plugin_terms(terms, basedir, inject):
         #    with_items: {{ alist }}
 
         stripped = terms.strip()
-        if not (stripped.startswith('{') or stripped.startswith('[')) and not stripped.startswith("/"):
+        if not (stripped.startswith('{') or stripped.startswith('[')) and not stripped.startswith("/") and not stripped.startswith('set(['):
             # if not already a list, get ready to evaluate with Jinja2
             # not sure why the "/" is in above code :)
             try:
                 new_terms = template.template(basedir, "{{ %s }}" % terms, inject)
-                if isinstance(new_terms, basestring) and new_terms.find("{{") != -1:
+                if isinstance(new_terms, basestring) and "{{" in new_terms:
                     pass
                 else:
                     terms = new_terms
@@ -1040,36 +1184,6 @@ def listify_lookup_plugin_terms(terms, basedir, inject):
             terms = [ terms ]
 
     return terms
-
-def deprecated(msg, version, removed=False):
-    ''' used to print out a deprecation message.'''
-
-    if not removed and not C.DEPRECATION_WARNINGS:
-        return
-
-    if not removed:
-        if version:
-            new_msg = "\n[DEPRECATION WARNING]: %s. This feature will be removed in version %s." % (msg, version)
-        else:
-            new_msg = "\n[DEPRECATION WARNING]: %s. This feature will be removed in a future release." % (msg)
-        new_msg = new_msg + " Deprecation warnings can be disabled by setting deprecation_warnings=False in ansible.cfg.\n\n"
-    else:
-        raise errors.AnsibleError("[DEPRECATED]: %s.  Please update your playbooks." % msg)
-
-    wrapped = textwrap.wrap(new_msg, 79)
-    new_msg = "\n".join(wrapped) + "\n"
-
-    if new_msg not in deprecations:
-        display(new_msg, color='purple', stderr=True)
-        deprecations[new_msg] = 1
-
-def warning(msg):
-    new_msg = "\n[WARNING]: %s" % msg
-    wrapped = textwrap.wrap(new_msg, 79)
-    new_msg = "\n".join(wrapped) + "\n"
-    if new_msg not in warns:
-        display(new_msg, color='bright purple', stderr=True)
-        warns[new_msg] = 1
 
 def combine_vars(a, b):
 
@@ -1096,4 +1210,112 @@ def before_comment(msg):
     msg = msg.replace("**NOT_A_COMMENT**","#")
     return msg
 
+def load_vars(basepath, results, vault_password=None):
+    """
+    Load variables from any potential yaml filename combinations of basepath,
+    returning result.
+    """
+
+    paths_to_check = [ "".join([basepath, ext])
+                       for ext in C.YAML_FILENAME_EXTENSIONS ]
+
+    found_paths = []
+
+    for path in paths_to_check:
+        found, results = _load_vars_from_path(path, results, vault_password=vault_password)
+        if found:
+            found_paths.append(path)
+
+
+    # disallow the potentially confusing situation that there are multiple
+    # variable files for the same name. For example if both group_vars/all.yml
+    # and group_vars/all.yaml
+    if len(found_paths) > 1:
+        raise errors.AnsibleError("Multiple variable files found. "
+            "There should only be one. %s" % ( found_paths, ))
+
+    return results
+
+## load variables from yaml files/dirs
+#  e.g. host/group_vars
+#
+def _load_vars_from_path(path, results, vault_password=None):
+    """
+    Robustly access the file at path and load variables, carefully reporting
+    errors in a friendly/informative way.
+
+    Return the tuple (found, new_results, )
+    """
+
+    try:
+        # in the case of a symbolic link, we want the stat of the link itself,
+        # not its target
+        pathstat = os.lstat(path)
+    except os.error, err:
+        # most common case is that nothing exists at that path.
+        if err.errno == errno.ENOENT:
+            return False, results
+        # otherwise this is a condition we should report to the user
+        raise errors.AnsibleError(
+            "%s is not accessible: %s."
+            " Please check its permissions." % ( path, err.strerror))
+
+    # symbolic link
+    if stat.S_ISLNK(pathstat.st_mode):
+        try:
+            target = os.path.realpath(path)
+        except os.error, err2:
+            raise errors.AnsibleError("The symbolic link at %s "
+                "is not readable: %s.  Please check its permissions."
+                % (path, err2.strerror, ))
+        # follow symbolic link chains by recursing, so we repeat the same
+        # permissions checks above and provide useful errors.
+        return _load_vars_from_path(target, results)
+
+    # directory
+    if stat.S_ISDIR(pathstat.st_mode):
+
+        # support organizing variables across multiple files in a directory
+        return True, _load_vars_from_folder(path, results, vault_password=vault_password)
+
+    # regular file
+    elif stat.S_ISREG(pathstat.st_mode):
+        data = parse_yaml_from_file(path, vault_password=vault_password)
+        if type(data) != dict:
+            raise errors.AnsibleError(
+                "%s must be stored as a dictionary/hash" % path)
+
+        # combine vars overrides by default but can be configured to do a
+        # hash merge in settings
+        results = combine_vars(results, data)
+        return True, results
+
+    # something else? could be a fifo, socket, device, etc.
+    else:
+        raise errors.AnsibleError("Expected a variable file or directory "
+            "but found a non-file object at path %s" % (path, ))
+
+def _load_vars_from_folder(folder_path, results, vault_password=None):
+    """
+    Load all variables within a folder recursively.
+    """
+
+    # this function and _load_vars_from_path are mutually recursive
+
+    try:
+        names = os.listdir(folder_path)
+    except os.error, err:
+        raise errors.AnsibleError(
+            "This folder cannot be listed: %s: %s."
+             % ( folder_path, err.strerror))
+
+    # evaluate files in a stable order rather than whatever order the
+    # filesystem lists them.
+    names.sort()
+
+    # do not parse hidden files or dirs, e.g. .svn/
+    paths = [os.path.join(folder_path, name) for name in names if not name.startswith('.')]
+    for path in paths:
+        _found, results = _load_vars_from_path(path, results, vault_password=vault_password)
+    return results
 

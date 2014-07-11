@@ -68,7 +68,7 @@ class Task(object):
             if x in utils.plugins.module_finder:
 
                 if 'action' in ds:
-                    raise errors.AnsibleError("multiple actions specified in task %s" % (ds.get('name', ds['action'])))
+                    raise errors.AnsibleError("multiple actions specified in task: '%s' and '%s'" % (x, ds.get('name', ds['action'])))
                 if isinstance(ds[x], dict):
                     if 'args' in ds:
                         raise errors.AnsibleError("can't combine args: and a dict for %s: in task %s" % (x, ds.get('name', "%s: %s" % (x, ds[x]))))
@@ -206,8 +206,12 @@ class Task(object):
         self.changed_when = ds.get('changed_when', None)
         self.failed_when = ds.get('failed_when', None)
 
-        self.async_seconds = int(ds.get('async', 0))  # not async by default
-        self.async_poll_interval = int(ds.get('poll', 10))  # default poll = 10 seconds
+        self.async_seconds = ds.get('async', 0)  # not async by default
+        self.async_seconds = template.template_from_string(play.basedir, self.async_seconds, self.module_vars)
+        self.async_seconds = int(self.async_seconds)
+        self.async_poll_interval = ds.get('poll', 10)  # default poll = 10 seconds
+        self.async_poll_interval = template.template_from_string(play.basedir, self.async_poll_interval, self.module_vars)
+        self.async_poll_interval = int(self.async_poll_interval)
         self.notify = ds.get('notify', [])
         self.first_available_file = ds.get('first_available_file', None)
 

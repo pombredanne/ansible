@@ -107,7 +107,6 @@ options:
       - the GCE zone to use
     required: true
     default: "us-central1-a"
-    choices: ["us-central1-a", "us-central1-b", "us-central2-a", "europe-west1-a", "europe-west1-b"]
     aliases: []
 
 requirements: [ "libcloud" ]
@@ -351,13 +350,11 @@ def main():
             metadata = dict(),
             name = dict(),
             network = dict(default='default'),
-            persistent_boot_disk = dict(type='bool', choices=BOOLEANS, default=False),
+            persistent_boot_disk = dict(type='bool', default=False),
             state = dict(choices=['active', 'present', 'absent', 'deleted'],
                     default='present'),
             tags = dict(type='list'),
-            zone = dict(choices=['us-central1-a', 'us-central1-b',
-                    'us-central2-a', 'europe-west1-a', 'europe-west1-b'],
-                    default='us-central1-a'),
+            zone = dict(default='us-central1-a'),
             service_account_email = dict(),
             pem_file = dict(),
             project_id = dict(),

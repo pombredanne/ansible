@@ -1,4 +1,5 @@
-[![PyPI version](https://badge.fury.io/py/ansible.png)](http://badge.fury.io/py/ansible)
+[![PyPI version](https://badge.fury.io/py/ansible.png)](http://badge.fury.io/py/ansible) [![PyPI downloads](https://pypip.in/d/ansible/badge.png)](https://pypi.python.org/pypi/ansible)
+
 
 Ansible
 =======
@@ -41,7 +42,8 @@ Branch Info
 Author
 ======
 
-Michael DeHaan -- michael@ansible.com
+Ansible was created by Michael DeHaan (michael@ansible.com) and has contributions from over
+700 users (and growing).  Thanks everyone!
 
 [Ansible, Inc](http://ansible.com)
 

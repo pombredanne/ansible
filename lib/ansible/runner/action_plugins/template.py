@@ -79,15 +79,15 @@ class ActionModule(object):
                 source = utils.path_dwim(self.runner.basedir, source)
 
 
-        if dest.endswith("/"):
+        if dest.endswith("/"): # CCTODO: Fix path for Windows hosts.
             base = os.path.basename(source)
             dest = os.path.join(dest, base)
 
         # template the source data locally & get ready to transfer
         try:
-            resultant = template.template_from_file(self.runner.basedir, source, inject)
+            resultant = template.template_from_file(self.runner.basedir, source, inject, vault_password=self.runner.vault_pass)
         except Exception, e:
-            result = dict(failed=True, msg=str(e))
+            result = dict(failed=True, msg=type(e).__name__ + ": " + str(e))
             return ReturnData(conn=conn, comm_ok=False, result=result)
 
         local_md5 = utils.md5s(resultant)
@@ -114,7 +114,7 @@ class ActionModule(object):
 
             # fix file permissions when the copy is done as a different user
             if self.runner.sudo and self.runner.sudo_user != 'root':
-                self.runner._low_level_exec_command(conn, "chmod a+r %s" % xfered, tmp)
+                self.runner._remote_chmod(conn, 'a+r', xfered, tmp)
 
             # run the copy module
             module_args = "%s src=%s dest=%s original_basename=%s" % (module_args, pipes.quote(xfered), pipes.quote(dest), pipes.quote(os.path.basename(source)))
@@ -123,7 +123,8 @@ class ActionModule(object):
                 return ReturnData(conn=conn, comm_ok=True, result=dict(changed=True), diff=dict(before_header=dest, after_header=source, before=dest_contents, after=resultant))
             else:
                 res = self.runner._execute_module(conn, tmp, 'copy', module_args, inject=inject, complex_args=complex_args)
-                res.diff = dict(before=dest_contents, after=resultant)
+                if res.result.get('changed', False):
+                    res.diff = dict(before=dest_contents, after=resultant)
                 return res
         else:
             return self.runner._execute_module(conn, tmp, 'file', module_args, inject=inject, complex_args=complex_args)

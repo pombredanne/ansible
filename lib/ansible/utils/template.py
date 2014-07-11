@@ -80,7 +80,8 @@ class Flags:
 
 FILTER_PLUGINS = None
 _LISTRE = re.compile(r"(\w+)\[(\d+)\]")
-JINJA2_OVERRIDE='#jinja2:'
+JINJA2_OVERRIDE = '#jinja2:'
+JINJA2_ALLOWED_OVERRIDES = ['trim_blocks', 'lstrip_blocks', 'newline_sequence', 'keep_trailing_newline']
 
 def lookup(name, *args, **kwargs):
     from ansible import utils
@@ -88,8 +89,17 @@ def lookup(name, *args, **kwargs):
     vars = kwargs.get('vars', None)
 
     if instance is not None:
-        ran = instance.run(*args, inject=vars, **kwargs)
-        return ",".join(ran)
+        # safely catch run failures per #5059
+        try:
+            ran = instance.run(*args, inject=vars, **kwargs)
+        except errors.AnsibleError:
+            # Plugin raised this on purpose
+            raise
+        except Exception, e:
+            ran = None
+        if ran:
+            ran = ",".join(ran)
+        return ran
     else:
         raise errors.AnsibleError("lookup plugin (%s) not found" % name)
 
@@ -193,7 +203,7 @@ class J2Template(jinja2.environment.Template):
     def new_context(self, vars=None, shared=False, locals=None):
         return jinja2.runtime.Context(self.environment, vars.add_locals(locals), self.name, self.blocks)
 
-def template_from_file(basedir, path, vars):
+def template_from_file(basedir, path, vars, vault_password=None):
     ''' run a file through the templating engine '''
 
     fail_on_undefined = C.DEFAULT_UNDEFINED_VAR_BEHAVIOR
@@ -222,7 +232,6 @@ def template_from_file(basedir, path, vars):
     except:
         raise errors.AnsibleError("unable to read %s" % realpath)
 
-
     # Get jinja env overrides from template
     if data.startswith(JINJA2_OVERRIDE):
         eol = data.find('\n')
@@ -230,7 +239,10 @@ def template_from_file(basedir, path, vars):
         data = data[eol+1:]
         for pair in line.split(','):
             (key,val) = pair.split(':')
-            setattr(environment,key.strip(),ast.literal_eval(val.strip()))
+            key = key.strip()
+            if key in JINJA2_ALLOWED_OVERRIDES:
+                setattr(environment, key, ast.literal_eval(val.strip()))
+
 
     environment.template_class = J2Template
     try:
@@ -272,6 +284,16 @@ def template_from_file(basedir, path, vars):
         res = jinja2.utils.concat(t.root_render_func(t.new_context(_jinja2_vars(basedir, vars, t.globals, fail_on_undefined), shared=True)))
     except jinja2.exceptions.UndefinedError, e:
         raise errors.AnsibleUndefinedVariable("One or more undefined variables: %s" % str(e))
+    except jinja2.exceptions.TemplateNotFound, e:
+        # Throw an exception which includes a more user friendly error message
+        # This likely will happen for included sub-template. Not that besides
+        # pure "file not found" it may happen due to Jinja2's "security"
+        # checks on path.
+        values = {'name': realpath, 'subname': str(e)}
+        msg = 'file: %(name)s, error: Cannot find/not allowed to load (include) template %(subname)s' % \
+               values
+        error = errors.AnsibleError(msg)
+        raise error
 
     # The low level calls above do not preserve the newline
     # characters at the end of the input data, so we use the
@@ -310,14 +332,18 @@ def template_from_string(basedir, data, vars, fail_on_undefined=False):
             if os.path.exists(filesdir):
                 basedir = filesdir
 
-        data = data.decode('utf-8')
+        # 6227
+        if isinstance(data, unicode):
+            try:
+                data = data.decode('utf-8')
+            except UnicodeEncodeError, e:
+                pass
+
         try:
             t = environment.from_string(data)
         except Exception, e:
             if 'recursion' in str(e):
                 raise errors.AnsibleError("recursive loop detected in template string: %s" % data)
-            elif isinstance(e, TemplateSyntaxError):
-                raise errors.AnsibleError("there was an error in the template: %s" % data)
             else:
                 return data
 
@@ -334,7 +360,10 @@ def template_from_string(basedir, data, vars, fail_on_undefined=False):
             res = jinja2.utils.concat(rf)
         except TypeError, te:
             if 'StrictUndefined' in str(te):
-                raise errors.AnsibleUndefinedVariable("unable to look up a name or access an attribute in template string")
+                raise errors.AnsibleUndefinedVariable(
+                    "Unable to look up a name or access an attribute in template string. " + \
+                    "Make sure your variable name does not contain invalid characters like '-'."
+                )
             else:
                 raise errors.AnsibleError("an unexpected type error occured. Error was %s" % te)
         return res
